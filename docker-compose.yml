@@ -1,0 +1,56 @@
+name: rag2agent
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: rag2agent-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rag2agent}
+      POSTGRES_USER: ${POSTGRES_USER:-rag2agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rag2agent}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rag2agent} -d ${POSTGRES_DB:-rag2agent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: rag2agent-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: rag2agent-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-rag2agent}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-rag2agent-password}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

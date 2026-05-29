@@ -1,0 +1,34 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: rag2agent
+  profiles:
+    active: dev
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+rag2agent:
+  application:
+    name: RAG2Agent
+    version: 0.1.0-SNAPSHOT
+    modules:
+      - framework
+      - infra-ai
+      - rag-core
+      - mcp-server
+      - bootstrap
+  ai:
+    providers:
+      - name: openai-compatible
+        base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+        enabled: ${OPENAI_PROVIDER_ENABLED:false}
+        capabilities:
+          - chat
+          - embedding
+          - rerank

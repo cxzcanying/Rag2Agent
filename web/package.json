@@ -1,0 +1,17 @@
+{
+  "name": "rag2agent-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "^6.0.1",
+    "vite": "^7.1.12",
+    "vue": "^3.5.22"
+  },
+  "devDependencies": {}
+}
