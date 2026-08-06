@@ -10,6 +10,7 @@ RAG2Agent 是一个面向简历展示和工程训练的企业级 RAG + Agent 后
 - AI 抽象：自建 `infra-ai` 接口层，不把核心链路绑定到 Spring AI、LangChain4j 或 Python
 - 前端骨架：Vue + Vite
 - 本地环境：Docker Compose
+- 完整技术选型决策：[docs/tech-selection.md](docs/tech-selection.md)
 
 ## 模块说明
 
