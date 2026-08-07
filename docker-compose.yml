@@ -50,7 +50,69 @@ services:
       timeout: 5s
       retries: 5
 
+  rocketmq-namesrv:
+    image: apache/rocketmq:5.3.2
+    container_name: rag2agent-rocketmq-namesrv
+    command: ["nameserver"]
+    environment:
+      JAVA_OPT_EXT: "-server -Xms512m -Xmx512m -Xmn256m"
+    ports:
+      - "9876:9876"
+    volumes:
+      - rocketmq-namesrv-logs:/root/logs
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/9876' 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rocketmq-broker:
+    image: apache/rocketmq:5.3.2
+    container_name: rag2agent-rocketmq-broker
+    depends_on:
+      rocketmq-namesrv:
+        condition: service_healthy
+    command: ["broker", "-n", "rocketmq-namesrv:9876", "-c", "/home/rocketmq/rocketmq-5.3.2/conf/broker.conf"]
+    environment:
+      JAVA_OPT_EXT: "-server -Xms512m -Xmx512m -Xmn256m"
+      NAMESRV_ADDR: rocketmq-namesrv:9876
+    ports:
+      - "10909:10909"
+      - "10911:10911"
+      - "10912:10912"
+    volumes:
+      - ./docker/rocketmq/broker.conf:/home/rocketmq/rocketmq-5.3.2/conf/broker.conf:ro
+      - rocketmq-broker-logs:/root/logs
+      - rocketmq-broker-store:/root/store
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/10911' 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: rag2agent-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-rag2agent-password}
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-rag2agent-password} -d neo4j 'RETURN 1' > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
 volumes:
   postgres-data:
   redis-data:
   minio-data:
+  rocketmq-namesrv-logs:
+  rocketmq-broker-logs:
+  rocketmq-broker-store:
+  neo4j-data:
