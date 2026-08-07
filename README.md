@@ -6,7 +6,7 @@ RAG2Agent 是一个面向企业级 RAG + Agent 场景的后端基础工程。当
 
 - 后端主线：Java 21 + Spring Boot 3
 - 构建工具：Maven 多模块
-- 数据基础设施：PostgreSQL + pgvector、Redis、MinIO
+- 数据基础设施：PostgreSQL + pgvector、Redis、MinIO、Neo4j、RocketMQ
 - AI 抽象：自建 `infra-ai` 接口层，不把核心链路绑定到 Spring AI、LangChain4j 或 Python
 - 前端骨架：Vue + Vite
 - 本地环境：Docker Compose
