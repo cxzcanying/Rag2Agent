@@ -1,102 +1,109 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { onMounted, ref } from 'vue'
+import LoginView from './components/LoginView.vue'
+import KbView from './components/KbView.vue'
+import ChatView from './components/ChatView.vue'
+import { auth } from './api'
 
-const loading = ref(true);
-const health = ref(null);
-const version = ref(null);
-const providers = ref([]);
-const error = ref('');
+const loggedIn = ref(false)
+const currentTab = ref('kb')
+const user = ref(null)
 
-const statusLabel = computed(() => {
-  if (loading.value) {
-    return '检查中';
-  }
-  return health.value?.data?.status === 'UP' ? '运行中' : '未连接';
-});
-
-const statusClass = computed(() => (health.value?.data?.status === 'UP' ? 'status-ok' : 'status-warn'));
-
-async function fetchJson(path) {
-  const response = await fetch(path);
-  if (!response.ok) {
-    throw new Error(`${path} returned ${response.status}`);
-  }
-  return response.json();
+function onLoginSuccess(data) {
+  localStorage.setItem('rag2agent_token', data.token)
+  loggedIn.value = true
+  user.value = data.user
 }
 
-async function refreshStatus() {
-  loading.value = true;
-  error.value = '';
-  try {
-    const [healthResponse, versionResponse, providersResponse] = await Promise.all([
-      fetchJson('/api/health'),
-      fetchJson('/api/version'),
-      fetchJson('/api/ai/providers'),
-    ]);
-    health.value = healthResponse;
-    version.value = versionResponse;
-    providers.value = providersResponse.data ?? [];
-  } catch (caught) {
-    health.value = null;
-    version.value = null;
-    providers.value = [];
-    error.value = caught instanceof Error ? caught.message : 'unknown error';
-  } finally {
-    loading.value = false;
-  }
+function logout() {
+  localStorage.removeItem('rag2agent_token')
+  loggedIn.value = false
+  user.value = null
 }
 
-onMounted(refreshStatus);
+onMounted(async () => {
+  if (localStorage.getItem('rag2agent_token')) {
+    try {
+      user.value = await auth.me()
+      loggedIn.value = true
+    } catch {
+      logout()
+    }
+  }
+})
 </script>
 
 <template>
-  <main class="layout">
-    <section class="topbar">
-      <div>
-        <p class="eyebrow">RAG2Agent</p>
-        <h1>企业级 RAG + Agent 工程骨架</h1>
-      </div>
-      <button type="button" class="refresh-button" @click="refreshStatus">刷新</button>
-    </section>
-
-    <section class="status-grid">
-      <article class="panel">
-        <span class="label">后端状态</span>
-        <strong :class="statusClass">{{ statusLabel }}</strong>
-        <p v-if="error" class="muted">错误：{{ error }}</p>
-        <p v-else class="muted">接口：/api/health</p>
-      </article>
-
-      <article class="panel">
-        <span class="label">版本</span>
-        <strong>{{ version?.data?.version ?? '-' }}</strong>
-        <p class="muted">{{ version?.data?.name ?? '等待后端响应' }}</p>
-      </article>
-
-      <article class="panel">
-        <span class="label">模块</span>
-        <strong>{{ version?.data?.modules?.length ?? 0 }}</strong>
-        <p class="muted">{{ version?.data?.modules?.join(' / ') ?? '暂无数据' }}</p>
-      </article>
-    </section>
-
-    <section class="providers">
-      <div class="section-heading">
-        <h2>AI Provider</h2>
-        <span>{{ providers.length }} 个配置</span>
-      </div>
-      <div class="provider-list">
-        <article v-for="provider in providers" :key="provider.name" class="provider-row">
-          <div>
-            <strong>{{ provider.name }}</strong>
-            <p>{{ provider.baseUrl }}</p>
-          </div>
-          <span :class="provider.enabled ? 'pill enabled' : 'pill'">
-            {{ provider.enabled ? '已启用' : '未启用' }}
-          </span>
-        </article>
-        <p v-if="!providers.length" class="empty">后端启动后会显示模型供应商配置。</p>
-      </div>
-    </section>
-  </main>
+  <div class="app-shell">
+    <template v-if="!loggedIn">
+      <LoginView @success="onLoginSuccess" />
+    </template>
+    <template v-else>
+      <header class="topbar">
+        <h1>RAG2Agent</h1>
+        <nav>
+          <button :class="{ active: currentTab === 'kb' }" @click="currentTab = 'kb'">知识库</button>
+          <button :class="{ active: currentTab === 'chat' }" @click="currentTab = 'chat'">对话</button>
+        </nav>
+        <div class="user-area">
+          <span>{{ user?.nickname || user?.username }}</span>
+          <el-button size="small" @click="logout">退出</el-button>
+        </div>
+      </header>
+      <main class="main">
+        <KbView v-if="currentTab === 'kb'" />
+        <ChatView v-else />
+      </main>
+    </template>
+  </div>
 </template>
+
+<style scoped>
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 24px;
+  height: 56px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+}
+.topbar h1 {
+  font-size: 18px;
+  margin: 0;
+}
+.topbar nav {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+}
+.topbar nav button {
+  border: none;
+  background: transparent;
+  padding: 6px 14px;
+  cursor: pointer;
+  border-radius: 6px;
+  font-size: 14px;
+}
+.topbar nav button.active {
+  background: #409eff;
+  color: #fff;
+}
+.user-area {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  color: #606266;
+}
+.main {
+  flex: 1;
+  padding: 24px;
+  overflow: auto;
+}
+</style>
