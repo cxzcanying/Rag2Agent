@@ -2,6 +2,7 @@ package com.rag2agent.framework.exception;
 
 import com.rag2agent.framework.common.ApiResponse;
 import com.rag2agent.framework.common.ErrorCode;
+import cn.dev33.satoken.exception.NotLoginException;
 import jakarta.validation.ConstraintViolationException;
 import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
@@ -11,6 +12,9 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+/**
+ * @author 21311
+ */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -18,6 +22,12 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public ApiResponse<Void> handleBusinessException(BusinessException exception) {
         return ApiResponse.failure(exception.errorCode(), exception.getMessage());
+    }
+
+    @ExceptionHandler(NotLoginException.class)
+    @ResponseStatus(HttpStatus.UNAUTHORIZED)
+    public ApiResponse<Void> handleNotLoginException(NotLoginException exception) {
+        return ApiResponse.failure(ErrorCode.UNAUTHORIZED, "未登录或登录已过期");
     }
 
     @ExceptionHandler({

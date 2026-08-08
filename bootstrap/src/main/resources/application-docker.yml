@@ -1,4 +1,9 @@
 spring:
+  datasource:
+    url: jdbc:postgresql://postgres:5432/${POSTGRES_DB:rag2agent}
+    username: ${POSTGRES_USER:rag2agent}
+    password: ${POSTGRES_PASSWORD:rag2agent}
+    driver-class-name: org.postgresql.Driver
   data:
     redis:
       host: redis
@@ -13,4 +18,6 @@ rag2agent:
       database: ${POSTGRES_DB:rag2agent}
     minio:
       endpoint: http://minio:9000
+      access-key: ${MINIO_ROOT_USER:rag2agent}
+      secret-key: ${MINIO_ROOT_PASSWORD:rag2agent-password}
       bucket: rag2agent-documents

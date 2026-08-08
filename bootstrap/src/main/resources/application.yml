@@ -13,6 +13,22 @@ springdoc:
   swagger-ui:
     path: /swagger-ui.html
 
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
+
+sa-token:
+  token-name: satoken
+  timeout: 2592000 # 有效期 30 天
+  is-concurrent: true #并发登录
+  is-share: false #多次登录是否共享（同账号多设备各自有独立 token）
+  token-style: uuid #生成风格（tik雪花算法）
+  is-log: false
+
 rag2agent:
   application:
     name: RAG2Agent

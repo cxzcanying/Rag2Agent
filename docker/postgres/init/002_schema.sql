@@ -3,6 +3,16 @@
 -- 注意：docker compose 只在数据卷首次初始化时执行本目录脚本；
 -- 已有数据卷需手动执行或重建卷。
 
+-- 用户（Sa-Token 登录）
+CREATE TABLE IF NOT EXISTS app_user (
+    id            BIGSERIAL PRIMARY KEY,
+    username      VARCHAR(64) NOT NULL UNIQUE,
+    password_hash VARCHAR(128) NOT NULL,
+    nickname      VARCHAR(64),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- 知识库
 CREATE TABLE IF NOT EXISTS knowledge_base (
     id           BIGSERIAL PRIMARY KEY,
