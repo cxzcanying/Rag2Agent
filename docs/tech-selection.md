@@ -169,6 +169,7 @@
 ### 4.6 部署
 
 - 开发/演示：Docker Compose；应用镜像：多阶段 Dockerfile（Maven 构建 → JRE 21 运行时），非 root 运行；配置环境变量驱动，密钥不进仓库；K8s + Helm 演进。
+- 配置与密钥分离的完整说明与演进路径见 [configuration-secrets.md](configuration-secrets.md)。
 
 ## 5. 明确不选
 
