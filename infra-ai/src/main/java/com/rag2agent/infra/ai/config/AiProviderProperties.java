@@ -21,8 +21,13 @@ public class AiProviderProperties {
 
         private String name;
         private String baseUrl;
+        private String apiKey;
         private List<String> capabilities = new ArrayList<>();
         private boolean enabled;
+        private String chatModel;
+        private String chatModelPro;
+        private String embeddingModel;
+        private String rerankModel;
 
         public String getName() {
             return name;
@@ -40,6 +45,14 @@ public class AiProviderProperties {
             this.baseUrl = baseUrl;
         }
 
+        public String getApiKey() {
+            return apiKey;
+        }
+
+        public void setApiKey(String apiKey) {
+            this.apiKey = apiKey;
+        }
+
         public List<String> getCapabilities() {
             return capabilities;
         }
@@ -54,6 +67,38 @@ public class AiProviderProperties {
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+
+        public String getChatModel() {
+            return chatModel;
+        }
+
+        public void setChatModel(String chatModel) {
+            this.chatModel = chatModel;
+        }
+
+        public String getChatModelPro() {
+            return chatModelPro;
+        }
+
+        public void setChatModelPro(String chatModelPro) {
+            this.chatModelPro = chatModelPro;
+        }
+
+        public String getEmbeddingModel() {
+            return embeddingModel;
+        }
+
+        public void setEmbeddingModel(String embeddingModel) {
+            this.embeddingModel = embeddingModel;
+        }
+
+        public String getRerankModel() {
+            return rerankModel;
+        }
+
+        public void setRerankModel(String rerankModel) {
+            this.rerankModel = rerankModel;
         }
     }
 }

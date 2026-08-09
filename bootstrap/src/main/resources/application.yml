@@ -26,7 +26,7 @@ sa-token:
   timeout: 2592000 # 有效期 30 天
   is-concurrent: true #并发登录
   is-share: false #多次登录是否共享（同账号多设备各自有独立 token）
-  token-style: uuid #生成风格（tik雪花算法）
+  token-style: uuid #生成风格（若为tik是雪花算法）
   is-log: false
 
 rag2agent:
@@ -41,10 +41,20 @@ rag2agent:
       - bootstrap
   ai:
     providers:
-      - name: openai-compatible
-        base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
-        enabled: ${OPENAI_PROVIDER_ENABLED:false}
+      - name: deepseek
+        base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
+        api-key: ${DEEPSEEK_API_KEY:}
+        enabled: true #装配时只找启用的
         capabilities:
           - chat
+        chat-model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
+        chat-model-pro: ${DEEPSEEK_MODEL_PRO:deepseek-v4-pro}
+      - name: siliconflow
+        base-url: ${SILICONFLOW_BASE_URL:https://api.siliconflow.cn/v1}
+        api-key: ${SILICONFLOW_API_KEY:}
+        enabled: true
+        capabilities:
           - embedding
           - rerank
+        embedding-model: ${SILICONFLOW_EMBEDDING_MODEL:BAAI/bge-m3}
+        rerank-model: ${SILICONFLOW_RERANK_MODEL:BAAI/bge-reranker-v2-m3}
