@@ -26,10 +26,18 @@ public class DocumentService {
 
     private final DocumentMetaMapper documentMapper;
     private final MinioStorageService storage;
+    private final IngestTaskService ingestTaskService;
+    private final IngestMessageService ingestMessageService;
 
-    public DocumentService(DocumentMetaMapper documentMapper, MinioStorageService storage) {
+    public DocumentService(
+            DocumentMetaMapper documentMapper,
+            MinioStorageService storage,
+            IngestTaskService ingestTaskService,
+            IngestMessageService ingestMessageService) {
         this.documentMapper = documentMapper;
         this.storage = storage;
+        this.ingestTaskService = ingestTaskService;
+        this.ingestMessageService = ingestMessageService;
     }
 
     public DocumentView upload(Long kbId, MultipartFile file) {
@@ -63,6 +71,8 @@ public class DocumentService {
         doc.setVersion(1);
         doc.setStatus("UPLOADED");
         documentMapper.insert(doc);
+        ingestTaskService.create(doc.getId());
+        ingestMessageService.sendIngestTask(doc.getId());
         return DocumentView.from(doc);
     }
 

@@ -6,6 +6,10 @@ spring:
     name: rag2agent
   profiles:
     active: dev
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
 
 springdoc:
   api-docs:
