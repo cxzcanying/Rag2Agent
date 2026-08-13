@@ -102,3 +102,70 @@ mvn -pl bootstrap -am test -Dtest=AiClientRealIT -DfailIfNoTests=false "-Dsurefi
 
 - PowerShell 中 `-D` 参数如果带点（如 `-Dsurefire.failIfNoSpecifiedTests=false`）会被拆成多个参数，必须用引号包裹整个参数；
 - 集成测试的 `user.dir` 是模块目录，`.env` 加载器必须向上查找（见第 1 节）。
+
+## 3. D7-D8 文档入库：真实 PDF 验证与踩坑
+
+### 真实 PDF 验证结果（PdfBoxDocumentParser + RecursiveTextSplitter）
+
+通过环境变量 `VERIFY_PDF_PATHS`（分号分隔）指定待验证 PDF，运行：
+
+```powershell
+$env:VERIFY_PDF_PATHS="C:\path\a.pdf;C:\path\b.pdf"
+mvn -pl rag-core -am test -Dtest=RealPdfVerifyIT
+```
+
+统计写入 `rag-core/logs/pdf-verify-report.txt`（注意：测试的 `user.dir` 是模块目录，不是项目根）。
+
+实测三个中文 PDF：
+
+| 文档 | 大小 | 页数 | 文本长度 | 中文字符 | 切块数 | 解析耗时 |
+|---|---|---|---|---|---|---|
+| Java 面经手册（含表格） | 16MB | 417 | 35.9 万 | 9.3 万 | 1253 | 4.1s |
+| java基础讲义 | 6MB | 243 | 30 万 | 5.7 万 | 511 | 3.3s |
+| 廖雪峰 python 教程 | 5MB | 208 | 26.4 万 | 7.8 万 | 1310 | 0.9s |
+
+结论：中文提取无乱码、分页正确、切块正常；16MB 大文件解析约 4 秒可接受。
+已知优化点：PDF 提取是**行级换行**（每个视觉行一个 `\n`），"段落优先"切块效果打折，后续评测阶段做文本规范化（合并单换行、保留双换行段落）。
+
+### PDFBox 3.x API 变化（两次编译报错）
+
+1. `Loader.loadPDF(InputStream)` 不存在——3.x 只接受 `byte[]` / `File` / `RandomAccessRead`，需先 `input.readAllBytes()` 再加载；
+2. `PDType1Font.HELVETICA` 常量已移除——改为 `new PDType1Font(Standard14Fonts.FontName.HELVETICA)`。
+
+教训：网上多数 PDFBox 教程是 2.x 的写法，3.x 迁移时按编译错误逐个修正，别凭记忆写。
+
+### Spring Boot multipart 默认 1MB 上传限制
+
+现象：上传 5.76MB 的 PDF 返回 500 `Maximum upload size exceeded`。
+
+原因：Spring Boot 默认 `spring.servlet.multipart.max-file-size=1MB`。
+
+解决：`application.yml` 配置：
+
+```yaml
+spring:
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+```
+
+注意与业务层校验（DocumentService 50MB）保持一致。
+
+### RocketMQ broker 在 Docker 里注册容器内网 IP
+
+现象：Producer `send` 超时（`sendDefaultImpl call timeout`），但 namesrv 连接正常、broker 健康检查通过。
+
+原因：broker 向 namesrv 注册的地址是容器内网 IP（如 `172.20.0.7:10911`），宿主机上的应用拿到该地址连不上。
+
+排查：`docker exec rag2agent-rocketmq-broker sh mqadmin clusterList -n rocketmq-namesrv:9876` 看 `#Addr` 列。
+
+解决：`docker/rocketmq/broker.conf` 加 `brokerIP1 = 127.0.0.1`（单机开发场景；多机部署需填 broker 对外 IP），然后 `docker compose restart rocketmq-broker`，再用 `clusterList` 确认地址变为 `127.0.0.1:10911`。
+
+### 测试报告文件路径（user.dir 的第二次坑）
+
+现象：测试写 `logs/pdf-verify-report.txt` 找不到，实际写到了 `rag-core/logs/` 下。
+
+原因：surefire 运行时 `user.dir` 是模块目录，相对路径以模块为基准。
+
+解决：报告路径写成相对 `user.dir` 或使用绝对路径；验证脚本里先确认文件实际落点。
