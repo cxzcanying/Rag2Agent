@@ -27,6 +27,14 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 入库流水线：下载原文 -> 解析 -> 切块 -> Embedding（分批）-> 写 pgvector -> 状态流转。
+ *
+ * <p>可靠性设计三件套：
+ * <ul>
+ *   <li>幂等：任务已 INDEXED 直接跳过；写入前先清理同版本残留，扛住 RocketMQ 消息重试；</li>
+ *   <li>版本化：document.version 每次入库递增，chunk 带版本号，成功后删除旧版本数据，支持文档重新入库；</li>
+ *   <li>事务：版本切换（更新文档版本 + 删除旧 chunk）在同一个事务内完成，避免出现"版本新、数据旧"的中间态。</li>
+ * </ul>
+ *
  * 任务状态统一由 {@link IngestTaskService} 管理；任一步失败抛异常，由消费者决定重试。
  * @author 21311
  */
@@ -55,10 +63,13 @@ public class IngestPipelineService {
         this.storage = storage;
         this.embeddingClient = embeddingClient;
         this.ingestTaskService = ingestTaskService;
+        // 编程式事务：版本切换需要"更新文档版本 + 删除旧 chunk"原子完成，@Transactional 不适合跨方法编排，
+        // 用 TransactionTemplate 在方法内部精确控制事务边界。
         this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     public void process(Long documentId) {
+        // 前置校验：文档必须存在且为 PDF（第一版仅支持文本型 PDF）
         DocumentMeta document = documentMapper.selectById(documentId);
         if (document == null) {
             throw new IllegalStateException("文档不存在: " + documentId);
@@ -67,6 +78,8 @@ public class IngestPipelineService {
             throw new IllegalStateException("暂仅支持 PDF 入库，当前类型: " + document.getFileType());
         }
 
+        // 幂等保护：RocketMQ 重试时同一消息可能被再次消费，
+        // 任务已是 INDEXED 说明上次已成功，直接跳过避免重复入库。
         IngestTask task = ingestTaskService.latestByDocument(documentId);
         if (task == null) {
             throw new IllegalStateException("入库任务不存在: " + documentId);
@@ -75,6 +88,7 @@ public class IngestPipelineService {
             log.info("任务已完成，跳过重复消费: documentId={}", documentId);
             return;
         }
+        // 版本号 +1：每次成功入库递增，chunk 按版本写入/清理，支持文档重新入库不残留旧数据
         int nextVersion = (document.getVersion() == null ? 0 : document.getVersion()) + 1;
         ingestTaskService.markStage(task.getId(), "PARSING");
         documentMapper.update(null, new LambdaUpdateWrapper<DocumentMeta>()
@@ -95,19 +109,24 @@ public class IngestPipelineService {
             log.info("文档 {} 切块完成: {} chunks", documentId, chunks.size());
 
             ingestTaskService.markStage(task.getId(), "EMBEDDING");
+            // 先清理"同文档+同版本"的残留 chunk：
+            // 上次可能写到一半失败（如第 N 批 embedding 挂了），重试时先删再插，保证不产生重复/残缺数据
             chunkMapper.deleteByDocumentAndVersion(documentId, nextVersion);
             persistChunks(document, chunks, nextVersion);
 
+            // 版本切换：更新文档版本 + 删除所有旧版本 chunk，同一事务内原子完成
             switchVersion(documentId, nextVersion);
             ingestTaskService.markIndexed(task.getId());
             log.info("文档 {} 入库完成", documentId);
         } catch (Exception e) {
+            // 失败终态：记录错误信息，文档标记 FAILED；异常继续抛出给消费者走 RECONSUME_LATER 重试
             ingestTaskService.markFailed(task.getId(), e.getMessage());
             documentMapper.update(null, new LambdaUpdateWrapper<DocumentMeta>()
                     .eq(DocumentMeta::getId, documentId)
                     .set(DocumentMeta::getStatus, "FAILED"));
             throw new RuntimeException("入库处理失败: " + e.getMessage(), e);
         } finally {
+            // 临时 PDF 用完即删，避免磁盘残留（清理失败不影响主流程）
             if (tempPdf != null) {
                 try {
                     Files.deleteIfExists(tempPdf);
@@ -119,6 +138,8 @@ public class IngestPipelineService {
     }
 
     private void persistChunks(DocumentMeta document, List<TextChunk> chunks, int version) {
+        // 分批向量化：Embedding API 有请求体大小限制，每批 16 条，平衡调用次数与单次耗时；
+        // 返回向量与输入文本按下标一一对应，逐条写入 document_chunk（带版本号）
         int start = 0;
         while (start < chunks.size()) {
             int end = Math.min(start + EMBEDDING_BATCH_SIZE, chunks.size());
@@ -145,6 +166,8 @@ public class IngestPipelineService {
     }
 
     private void switchVersion(Long documentId, int version) {
+        // 事务边界：更新文档版本/状态 + 删除旧版本 chunk 必须原子完成。
+        // 若只更新版本号而旧 chunk 未删净，检索会混入上一版内容，形成"版本新、数据旧"的中间态。
         transactionTemplate.executeWithoutResult(status -> {
             documentMapper.update(null, new LambdaUpdateWrapper<DocumentMeta>()
                     .eq(DocumentMeta::getId, documentId)
@@ -155,6 +178,8 @@ public class IngestPipelineService {
     }
 
     private static String toVectorString(List<Float> vector) {
+        // List<Float> -> "[0.1,0.2,0.3]"，配合 SQL 的 ::vector 转换写入 pgvector；
+        // 用 join 而非 toString() 是为了去掉空格，保证 pgvector 输入格式严格兼容
         return vector.stream().map(String::valueOf).collect(Collectors.joining(",", "[", "]"));
     }
 }
