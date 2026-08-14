@@ -12,6 +12,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+/**
+ * RocketMQ 消费者配置
+ * @author 21311
+ */
 @Configuration
 public class RocketMqConsumerConfig {
 
@@ -23,7 +27,7 @@ public class RocketMqConsumerConfig {
             IngestPipelineService pipelineService) throws Exception {
         DefaultMQPushConsumer consumer = new DefaultMQPushConsumer("rag2agent-ingest-consumer");
         consumer.setNamesrvAddr(namesrvAddr);
-        consumer.subscribe(RocketMqProducerConfig.INGEST_TOPIC, "*");
+        consumer.subscribe(RocketMqProducerConfig.INGEST_TOPIC, "*"); //订阅此生产者的消息
         consumer.setConsumeThreadMin(2);
         consumer.setConsumeThreadMax(4);
         consumer.registerMessageListener((MessageListenerConcurrently) (messages, context) -> {
@@ -34,7 +38,8 @@ public class RocketMqConsumerConfig {
                     pipelineService.process(documentId);
                 } catch (Exception e) {
                     log.error("入库消费失败，稍后重试: {}", new String(message.getBody(), StandardCharsets.UTF_8), e);
-                    return ConsumeConcurrentlyStatus.RECONSUME_LATER;
+                    return ConsumeConcurrentlyStatus.RECONSUME_LATER; //消费失败，按退避间隔重新投送，间隔是递增的，16 次都没成功，消息会被投进死信队列
+                    //按批回调信息会导致整批消息重新投递，需要确保幂等性
                 }
             }
             return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;

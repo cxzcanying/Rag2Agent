@@ -1,5 +1,6 @@
 package com.rag2agent.bootstrap.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.rag2agent.bootstrap.entity.IngestTask;
 import com.rag2agent.bootstrap.mapper.IngestTaskMapper;
@@ -8,6 +9,7 @@ import org.springframework.stereotype.Service;
 /**
  * 入库任务状态机：
  * PENDING -> PARSING -> SPLITTING -> EMBEDDING -> INDEXED / FAILED
+ * @author 21311
  */
 @Service
 public class IngestTaskService {
@@ -27,6 +29,13 @@ public class IngestTaskService {
         return task.getId();
     }
 
+    public IngestTask latestByDocument(Long documentId) {
+        return taskMapper.selectOne(new LambdaQueryWrapper<IngestTask>()
+                .eq(IngestTask::getDocumentId, documentId)
+                .orderByDesc(IngestTask::getId)
+                .last("LIMIT 1"));
+    }
+
     public void markStage(Long taskId, String stage) {
         taskMapper.update(null, new LambdaUpdateWrapper<IngestTask>()
                 .eq(IngestTask::getId, taskId)
@@ -34,6 +43,7 @@ public class IngestTaskService {
                 .set(IngestTask::getStatus, stage));
     }
 
+    //失败终态
     public void markFailed(Long taskId, String errorMessage) {
         taskMapper.update(null, new LambdaUpdateWrapper<IngestTask>()
                 .eq(IngestTask::getId, taskId)
@@ -41,6 +51,7 @@ public class IngestTaskService {
                 .set(IngestTask::getErrorMessage, truncate(errorMessage)));
     }
 
+    //成功终态
     public void markIndexed(Long taskId) {
         taskMapper.update(null, new LambdaUpdateWrapper<IngestTask>()
                 .eq(IngestTask::getId, taskId)

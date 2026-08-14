@@ -10,6 +10,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+/**
+ * 状态机消息服务
+ * @author 21311
+ */
 @Service
 public class IngestMessageService {
 
@@ -24,7 +28,7 @@ public class IngestMessageService {
     public void sendIngestTask(Long documentId) {
         try {
             Message message = new Message(
-                    RocketMqProducerConfig.INGEST_TOPIC,
+                    RocketMqProducerConfig.INGEST_TOPIC, //使用TOPIC发布订阅模式
                     String.valueOf(documentId).getBytes(StandardCharsets.UTF_8));
             producer.send(message);
             log.info("入库任务消息已发送: documentId={}", documentId);

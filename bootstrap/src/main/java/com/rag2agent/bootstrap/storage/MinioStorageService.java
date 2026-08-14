@@ -42,9 +42,9 @@ public class MinioStorageService {
 
     public void upload(String objectKey, InputStream input, long size, String contentType) throws Exception {
         client.putObject(PutObjectArgs.builder()
-                .bucket(properties.getBucket())
-                .object(objectKey)
-                .stream(input, size, -1)
+                .bucket(properties.getBucket())//桶是逻辑隔离单位，对象存储，权限等按桶生效，一个MinIO不能有同名桶
+                .object(objectKey) //对象键：目录
+                .stream(input, size, -1) //input 文件输入流， size对象总大小 -1分片大小，让sdk根据对象大小自动分片
                 .contentType(contentType)
                 .build());
     }

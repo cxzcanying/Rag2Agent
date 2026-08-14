@@ -6,6 +6,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+/**
+ * RocketMQ 生产者配置
+ * @author 21311
+ */
 @Configuration
 public class RocketMqProducerConfig {
 

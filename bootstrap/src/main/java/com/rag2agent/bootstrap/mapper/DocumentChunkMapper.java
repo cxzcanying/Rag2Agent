@@ -1,5 +1,6 @@
 package com.rag2agent.bootstrap.mapper;
 
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Param;
 
@@ -10,10 +11,10 @@ public interface DocumentChunkMapper {
 
     @Insert("""
             INSERT INTO document_chunk
-                (document_id, kb_id, chunk_index, content, token_count, embedding, page_number, metadata)
+                (document_id, kb_id, chunk_index, content, token_count, embedding, page_number, metadata, version)
             VALUES
                 (#{documentId}, #{kbId}, #{chunkIndex}, #{content}, #{tokenCount},
-                 #{embedding}::vector, #{pageNumber}, CAST(#{metadata} AS jsonb))
+                 #{embedding}::vector, #{pageNumber}, CAST(#{metadata} AS jsonb), #{version})
             """)
     int insertChunk(
             @Param("documentId") Long documentId,
@@ -23,5 +24,14 @@ public interface DocumentChunkMapper {
             @Param("tokenCount") int tokenCount,
             @Param("embedding") String embedding,
             @Param("pageNumber") Integer pageNumber,
-            @Param("metadata") String metadata);
+            @Param("metadata") String metadata,
+            @Param("version") int version);
+
+    @Delete("DELETE FROM document_chunk WHERE document_id = #{documentId} AND version = #{version}")
+    int deleteByDocumentAndVersion(
+            @Param("documentId") Long documentId, @Param("version") int version);
+
+    @Delete("DELETE FROM document_chunk WHERE document_id = #{documentId} AND version < #{version}")
+    int deleteBelowVersion(
+            @Param("documentId") Long documentId, @Param("version") int version);
 }

@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS document (
 );
 
 -- 文档切块（embedding 为 BGE-M3 dense 向量，维度 1024）
+-- version 与 document.version 对应：每次入库生成新版本，检索只认当前版本
 CREATE TABLE IF NOT EXISTS document_chunk (
     id              BIGSERIAL PRIMARY KEY,
     document_id     BIGINT NOT NULL REFERENCES document(id),
@@ -49,11 +50,13 @@ CREATE TABLE IF NOT EXISTS document_chunk (
     parent_chunk_id BIGINT,
     page_number     INT,
     metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    version         INT NOT NULL DEFAULT 1,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunk_document ON document_chunk(document_id);
 CREATE INDEX IF NOT EXISTS idx_chunk_kb ON document_chunk(kb_id);
+CREATE INDEX IF NOT EXISTS idx_chunk_document_version ON document_chunk(document_id, version);
 
 -- 入库任务状态机：PENDING -> PARSING -> SPLITTING -> EMBEDDING -> INDEXED / FAILED
 CREATE TABLE IF NOT EXISTS ingest_task (

@@ -57,7 +57,7 @@ public class DocumentService {
                 kbId + "/" + LocalDate.now() + "/" + UUID.randomUUID() + "." + ext;
         try (InputStream input = file.getInputStream()) {
             storage.upload(objectKey, input, file.getSize(),
-                    file.getContentType() == null ? "application/octet-stream" : file.getContentType());
+                    file.getContentType() == null ? "application/octet-stream" : file.getContentType()); //设置文件类型默认为application/octet-stream
         } catch (Exception e) {
             throw new BusinessException(ErrorCode.INTERNAL_ERROR, "文件上传 MinIO 失败: " + e.getMessage());
         }
