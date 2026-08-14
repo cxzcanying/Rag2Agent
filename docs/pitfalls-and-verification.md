@@ -188,3 +188,61 @@ netstat -ano | findstr ":5439"
 
 解决：把 PostgreSQL 宿主映射改为不常见端口 `15432:5432`，并同步修改 `application-dev.yml` 数据源 URL。
 教训：Windows + Docker Desktop 下不要死磕"标准端口"，换高位不常见端口最省事；这个坑与代码无关，属环境问题。
+
+## 4. 入库幂等：从"先删后插"到"版本化快照"（技术选型记录）
+
+### 问题来源：消息一定会重复
+
+RocketMQ 是 at-least-once 语义，消息重复投递有三个现实来源：
+
+1. 消费失败返回 `RECONSUME_LATER`，消息按退避间隔重投——而且 `MessageListenerConcurrently` 是批量回调，一条失败会连累整批重投；
+2. 网络抖动导致 RocketMQ 没收到成功确认，重复发送；
+3. 应用处理到一半被重启，消息仍留在队列，又要重跑。
+
+原实现直接 INSERT `document_chunk`，重复执行会**重复插入 chunk**，后果是检索命中重复内容、库数据膨胀、embedding 重复花钱。
+
+### 三个候选方案的权衡
+
+方案 1：事务里先删后插（整体替换）
+
+- 优点：最简单彻底，重复跑多少次最终都只有一份数据，语义清晰；
+- 缺点：大文档（上千 chunk）全量删除+重插成本高；事务期间旧数据被清空产生窗口期；长事务持锁。
+
+方案 2：唯一约束 `(document_id, chunk_index)` + `ON CONFLICT` upsert（增量更新）
+
+- 优点：按 chunk 粒度幂等，无需全量删除，适合频繁更新与大数据量；
+- 缺点：依赖 chunk_index 稳定。当切块参数调整、文档更新或 embedding 模型升级导致新旧 chunk 集合数量/边界对不上时，**多余旧 chunk 删不掉**，必须补一个"删除不在新集合中的 chunk"的收尾步骤，复杂度回升；
+- 语义问题：chunk 是从文档派生的数据，文档一变就该整体换代，"局部更新"与之不匹配。
+
+方案 3：版本化快照（蓝绿切换）
+
+- 核心：每次入库生成新版本 `v = 旧版本 + 1`；新 chunk 全部带 `version=v` 写入；写完后在一个事务里把 `document.version` 切到 `v` 并删除 `< v` 的旧 chunk；检索只认当前版本。
+- 优点：一次解决幂等、文档更新、无窗口期三个问题——切换前旧版本完整可读，切换后新版本完整可读；
+- 缺点：多一个 version 字段的管理成本，实现比方案 1 稍复杂。
+
+### 最终选型：方案 3 + "已完成跳过"
+
+选方案 3 的理由：chunk 是文档的派生数据，整体换代才是匹配语义；项目 `document` 表本就预留了 `version` 字段；它同时覆盖了文档将来更新、重入库的需求。
+
+落地细节：
+
+1. `document_chunk` 增加 `version INT NOT NULL DEFAULT 1` 列与 `(document_id, version)` 索引（[002_schema.sql](docker/postgres/init/002_schema.sql)）；
+2. 写入前先删本次版本的残留（上次失败重投可能写了一半），再写新 chunk（[DocumentChunkMapper.java](../bootstrap/src/main/java/com/rag2agent/bootstrap/mapper/DocumentChunkMapper.java) 的 `deleteByDocumentAndVersion`）；
+3. 版本切换放在数据库事务里：`document.version = v` 与删除旧版本 chunk 原子完成（[IngestPipelineService.java](../bootstrap/src/main/java/com/rag2agent/bootstrap/service/IngestPipelineService.java) 的 `switchVersion`，用 `TransactionTemplate` 避免同类内调用事务失效）；
+4. 任务已 `INDEXED` 时直接跳过重复消费，避免确认丢失导致的重复 embedding 开销；
+5. 检索阶段必须按 `document.version` 过滤 chunk（待检索链路实现时落地），确保只读当前版本。
+
+### 验证方式与结果
+
+`IngestPipelineIdempotentIT`（IT 结尾，不进 CI）用 document_id=5 的 511-chunk 文档验证两个场景：
+
+- 任务已完成、消息重复投递 → 跳过，chunk 数量与版本均不变；
+- 任务改为 FAILED 模拟"处理一半失败后重投" → 重跑后 chunk 数量不变（整体替换）、版本 +1、旧版本 chunk 清理干净（仅剩 1 个版本）。
+
+结果：`Tests run: 1, BUILD SUCCESS`。
+
+### 遗留与演进
+
+- 方案 3 已在写入侧落地，检索侧"按当前版本过滤"待实现；
+- 文档更新/重新入库接口未来做（现在每次上传是新 document）；
+- 单文档 chunk 达数千级、全量重插变慢时，可再评估方案 2 的 upsert 作为增量优化，但语义上仍是"版本整体替换"。
