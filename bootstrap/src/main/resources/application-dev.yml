@@ -1,6 +1,6 @@
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/rag2agent
+    url: jdbc:postgresql://localhost:15432/rag2agent
     username: ${POSTGRES_USER:rag2agent}
     password: ${POSTGRES_PASSWORD:rag2agent}
     driver-class-name: org.postgresql.Driver

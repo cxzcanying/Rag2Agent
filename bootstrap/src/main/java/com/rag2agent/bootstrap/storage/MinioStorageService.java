@@ -3,6 +3,7 @@ package com.rag2agent.bootstrap.storage;
 import com.rag2agent.framework.config.MinioProperties;
 import io.minio.BucketExistsArgs;
 import io.minio.GetPresignedObjectUrlArgs;
+import io.minio.GetObjectArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
@@ -55,5 +56,14 @@ public class MinioStorageService {
                 .object(objectKey)
                 .expiry(expiresInSeconds)
                 .build());
+    }
+
+    public byte[] download(String objectKey) throws Exception {
+        try (InputStream input = client.getObject(GetObjectArgs.builder()
+                .bucket(properties.getBucket())
+                .object(objectKey)
+                .build())) {
+            return input.readAllBytes();
+        }
     }
 }
