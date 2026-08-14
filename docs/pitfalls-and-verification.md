@@ -169,3 +169,22 @@ spring:
 原因：surefire 运行时 `user.dir` 是模块目录，相对路径以模块为基准。
 
 解决：报告路径写成相对 `user.dir` 或使用绝对路径；验证脚本里先确认文件实际落点。
+
+### Windows 保留端口范围（Docker 端口绑定失败）
+
+现象：PostgreSQL 容器映射宿主端口 5432、5433、5439 全部失败，报错
+`Ports are not available ... bind: An attempt was made to access a socket in a way forbidden by its access permissions`；
+其余端口（6379/9000/9876 等）正常。
+
+原因：Hyper-V / WSL2 会动态保留一段 TCP 端口范围（`netsh interface ipv4 show excludedportrange protocol=tcp` 可查），
+Windows 重启后保留范围会变化；个别端口（如 5439）不在列表却也绑定失败，属于 Docker Desktop 端口转发层的偶发问题。
+
+排查：
+
+```powershell
+netsh interface ipv4 show excludedportrange protocol=tcp
+netstat -ano | findstr ":5439"
+```
+
+解决：把 PostgreSQL 宿主映射改为不常见端口 `15432:5432`，并同步修改 `application-dev.yml` 数据源 URL。
+教训：Windows + Docker Desktop 下不要死磕"标准端口"，换高位不常见端口最省事；这个坑与代码无关，属环境问题。
