@@ -38,4 +38,9 @@ public class DocumentController {
     public ApiResponse<PresignResponse> presign(@PathVariable("id") Long id) {
         return ApiResponse.success(documentService.presign(id));
     }
+
+    @PostMapping("/{id}/reingest")
+    public ApiResponse<DocumentView> reingest(@PathVariable("id") Long id) {
+        return ApiResponse.success(documentService.reingest(id));
+    }
 }

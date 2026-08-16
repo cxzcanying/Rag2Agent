@@ -104,6 +104,10 @@ public class IngestPipelineService {
                     String.valueOf(documentId), document.getFileName(), tempPdf.toUri(),
                     "application/pdf", Map.of()));
 
+            // 扫描件/无文本层 PDF 会解析出空文本，0 chunk 却标 INDEXED，检索无结果但状态正常；这里提前拒绝
+            if (parsed.text() == null || parsed.text().trim().length() < 50) {
+                throw new IllegalStateException("PDF 提取文本为空或过短，可能为扫描件，暂不支持 OCR");
+            }
             ingestTaskService.markStage(task.getId(), "SPLITTING");
             List<TextChunk> chunks = new RecursiveTextSplitter().split(parsed);
             log.info("文档 {} 切块完成: {} chunks", documentId, chunks.size());
@@ -148,6 +152,11 @@ public class IngestPipelineService {
                     .toList();
             EmbeddingResponse response = embeddingClient.embed(new EmbeddingRequest(
                     "siliconflow", null, batchTexts));
+            // 防御：API 少返回向量时按输入数量写会导致后半段 chunk 静默漏写，这里先校验数量一致
+            if (response.vectors().size() != batchTexts.size()) {
+                throw new IllegalStateException("Embedding 返回数量不匹配: 期望 " + batchTexts.size()
+                        + " 条，实际 " + response.vectors().size() + " 条");
+            }
             for (int i = 0; i < response.vectors().size(); i++) {
                 TextChunk chunk = chunks.get(start + i);
                 chunkMapper.insertChunk(

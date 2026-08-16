@@ -39,6 +39,7 @@ public class IngestTaskService {
     public void markStage(Long taskId, String stage) {
         taskMapper.update(null, new LambdaUpdateWrapper<IngestTask>()
                 .eq(IngestTask::getId, taskId)
+                .ne(IngestTask::getStatus, "INDEXED")
                 .set(IngestTask::getCurrentStage, stage)
                 .set(IngestTask::getStatus, stage));
     }
@@ -47,6 +48,7 @@ public class IngestTaskService {
     public void markFailed(Long taskId, String errorMessage) {
         taskMapper.update(null, new LambdaUpdateWrapper<IngestTask>()
                 .eq(IngestTask::getId, taskId)
+                .ne(IngestTask::getStatus, "INDEXED")
                 .set(IngestTask::getStatus, "FAILED")
                 .set(IngestTask::getErrorMessage, truncate(errorMessage)));
     }
@@ -55,8 +57,18 @@ public class IngestTaskService {
     public void markIndexed(Long taskId) {
         taskMapper.update(null, new LambdaUpdateWrapper<IngestTask>()
                 .eq(IngestTask::getId, taskId)
+                .ne(IngestTask::getStatus, "INDEXED")
                 .set(IngestTask::getStatus, "INDEXED")
                 .set(IngestTask::getCurrentStage, "INDEXED")
+                .set(IngestTask::getErrorMessage, null));
+    }
+
+    // 手动重试：重置任务为 PENDING，供 reingest 使用
+    public void resetToPending(Long taskId) {
+        taskMapper.update(null, new LambdaUpdateWrapper<IngestTask>()
+                .eq(IngestTask::getId, taskId)
+                .set(IngestTask::getStatus, "PENDING")
+                .set(IngestTask::getCurrentStage, "PENDING")
                 .set(IngestTask::getErrorMessage, null));
     }
 

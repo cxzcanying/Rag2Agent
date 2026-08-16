@@ -6,10 +6,12 @@ import com.rag2agent.infra.ai.model.EmbeddingRequest;
 import com.rag2agent.infra.ai.model.EmbeddingResponse;
 import com.rag2agent.infra.ai.model.RerankRequest;
 import com.rag2agent.infra.ai.model.RerankResponse;
+import com.rag2agent.infra.ai.model.RerankResult;
 import com.rag2agent.rag.core.retrieval.RetrievalResult;
 import com.rag2agent.rag.core.retrieval.impl.QueryRouter;
 import com.rag2agent.rag.core.retrieval.impl.QueryRouter.Route;
 import com.rag2agent.rag.core.retrieval.impl.RrfFusion;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -134,7 +136,7 @@ public class HybridSearchService {
                         Map.of(
                                 "documentId", rs.getLong("document_id"),
                         "chunkIndex", rs.getInt("chunk_index"))),
-                query, kbId, query, query, topK);
+                query, kbId, escapeLike(query), query, topK);
     }
 
     /**
@@ -150,6 +152,8 @@ public class HybridSearchService {
         RerankResponse response = rerankClient.rerank(
                 new RerankRequest("siliconflow", null, query, contents, Math.min(topK, contents.size())));
         return response.results().stream()
+                .filter(result -> result.index() >= 0 && result.index() < fused.size())
+                .sorted(Comparator.comparingDouble(RerankResult::score).reversed())
                 .map(result -> {
                     RetrievalResult original = fused.get(result.index());
                     return new RetrievalResult(
@@ -171,5 +175,13 @@ public class HybridSearchService {
             sb.append(vector.get(i));
         }
         return sb.append("]").toString();
+    }
+
+    /**
+     * LIKE/ILIKE 模式转义：把反斜杠、% 和 _ 转成字面量，
+     * 避免用户输入被当作通配符而改变匹配语义。
+     */
+    private static String escapeLike(String value) {
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 }

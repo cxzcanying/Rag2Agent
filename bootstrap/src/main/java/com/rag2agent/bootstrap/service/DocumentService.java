@@ -3,6 +3,7 @@ package com.rag2agent.bootstrap.service;
 import com.rag2agent.bootstrap.dto.DocumentDtos.DocumentView;
 import com.rag2agent.bootstrap.dto.DocumentDtos.PresignResponse;
 import com.rag2agent.bootstrap.entity.DocumentMeta;
+import com.rag2agent.bootstrap.entity.IngestTask;
 import com.rag2agent.bootstrap.mapper.DocumentMetaMapper;
 import com.rag2agent.bootstrap.storage.MinioStorageService;
 import com.rag2agent.framework.common.ErrorCode;
@@ -71,8 +72,14 @@ public class DocumentService {
         doc.setVersion(1);
         doc.setStatus("UPLOADED");
         documentMapper.insert(doc);
-        ingestTaskService.create(doc.getId());
-        ingestMessageService.sendIngestTask(doc.getId());
+        Long taskId = ingestTaskService.create(doc.getId());
+        try {
+            ingestMessageService.sendIngestTask(doc.getId());
+        } catch (Exception e) {
+            // 消息发送失败时文档和任务已落库，标记任务失败避免留下永远无人处理的 PENDING 脏数据
+            ingestTaskService.markFailed(taskId, "入库消息发送失败: " + e.getMessage());
+            throw e;
+        }
         return DocumentView.from(doc);
     }
 
@@ -97,6 +104,24 @@ public class DocumentService {
         } catch (Exception e) {
             throw new BusinessException(ErrorCode.INTERNAL_ERROR, "生成下载链接失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 失败任务手动重试：重置最新任务为 PENDING 后重新发送入库消息。
+     * 解决 RocketMQ 重试耗尽进死信后没有人工触发入口的问题。
+     */
+    public DocumentView reingest(Long documentId) {
+        DocumentMeta doc = documentMapper.selectById(documentId);
+        if (doc == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "文档不存在");
+        }
+        IngestTask task = ingestTaskService.latestByDocument(documentId);
+        if (task == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "入库任务不存在");
+        }
+        ingestTaskService.resetToPending(task.getId());
+        ingestMessageService.sendIngestTask(documentId);
+        return DocumentView.from(doc);
     }
 
     private String extensionOf(String fileName) {
