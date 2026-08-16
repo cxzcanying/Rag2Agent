@@ -39,11 +39,8 @@ RAG2Agent：企业级 RAG + Agent 后端工程。Java 21 + Spring Boot 3.5，Mav
 
 ## 文档索引
 
-- docs/architecture.md：系统架构总览
-- docs/tech-selection.md：技术选型决策
+- docs/tech-selection.md：技术选型、模块边界、配置密钥与分阶段路线图（总纲）
 - docs/development-plan.md：阶段计划与验收
 - docs/pitfalls-and-verification.md：翻车记录（必读）
 - docs/todo.md：工程问题 TODO
 - docs/evaluation-checklist.md：D13 评测清单
-- docs/configuration-secrets.md：配置与密钥管理
-- docs/roadmap.md：路线图
