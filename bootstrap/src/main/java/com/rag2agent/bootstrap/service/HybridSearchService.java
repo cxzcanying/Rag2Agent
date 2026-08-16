@@ -19,6 +19,10 @@ import org.springframework.stereotype.Service;
  * 混合检索：向量（pgvector 余弦相似度）+ 关键词（pg_trgm）两路召回，RRF 融合，再 Rerank 精排。
  * 引用溯源：metadata 里带 document_id / chunk_index，检索结果可直接定位原文。
  * 权限边界：SQL 按 kb_id 过滤；版本正确性靠 c.version = d.version 保证只查当前版本。
+ * <p>
+ * 编排流程：QueryRouter 规则路由决定走哪几路 → 两路召回（向量/关键词）→ RRF 融合
+ * （分数域统一、同名 chunk 去重累加）→ bge-reranker 精排（只改排序不改召回）。
+ * @author 21311
  */
 @Service
 public class HybridSearchService {
@@ -27,6 +31,11 @@ public class HybridSearchService {
     private final EmbeddingClient embeddingClient;
     private final RerankClient rerankClient;
 
+    /**
+     * 三个依赖的分工：
+     * JdbcTemplate 负责两条检索 SQL；EmbeddingClient 把查询文本向量化；
+     * RerankClient 对融合后的候选重新打分。
+     */
     public HybridSearchService(JdbcTemplate jdbc, EmbeddingClient embeddingClient, RerankClient rerankClient) {
         this.jdbc = jdbc;
         this.embeddingClient = embeddingClient;
@@ -34,17 +43,20 @@ public class HybridSearchService {
     }
 
     public List<RetrievalResult> search(Long kbId, String query, int topK) {
-        // 规则路由：疑问句走语义（只向量），短词/编号走关键词（省一次 embedding），其余混合
+        // 规则路由：疑问句大部分情况是开放式问题走语义（只向量），短词/编号是专业术语走关键词（省一次 embedding），其余混合
         Route route = QueryRouter.route(query);
+        // 向量路：只有 KEYWORD 路由才跳过（短词向量化容易语义漂移，直接走关键词更准）
         List<RetrievalResult> vectorResults = (route != Route.KEYWORD)
                 ? vectorSearch(kbId, embedQuery(query), topK)
                 : List.of();
+        // 关键词路：SEMANTIC 路由跳过（疑问句关键词召回意义不大，省一次 SQL）
         List<RetrievalResult> keywordResults = (route != Route.SEMANTIC)
                 ? keywordSearch(kbId, query, topK)
                 : List.of();
 
         // RRF 融合两路结果，分数域统一、同名 chunk 去重累加
         List<RetrievalResult> fused = RrfFusion.fuse(List.of(vectorResults, keywordResults), topK);
+        // 两路都没有候选：直接返回空，避免拿空列表去调 rerank 白花钱
         if (fused.isEmpty()) {
             return List.of();
         }
@@ -52,17 +64,30 @@ public class HybridSearchService {
         return rerank(query, fused, topK);
     }
 
+    /**
+     * 查询向量化：把用户问题转成 1024 维向量，供 pgvector 余弦检索使用。
+     * model 传 null 表示走 provider 配置里的默认模型（BAAI/bge-m3）。
+     */
     private List<Float> embedQuery(String query) {
         EmbeddingResponse response =
                 embeddingClient.embed(new EmbeddingRequest("siliconflow", null, List.of(query)));
+        // 向量化失败宁可抛异常，也不返回空结果让上层误以为"没查到"
         if (response.vectors().isEmpty()) {
             throw new IllegalStateException("查询向量化返回为空");
         }
-        return response.vectors().get(0);
+        return response.vectors().getFirst();
     }
 
+    /**
+     * 向量检索：按余弦距离（<=>）排序取最相似的 chunk。
+     * 三个关键点：
+     * 1) 1 - 距离 = 相似度，越大越靠前；
+     * 2) JOIN document 且 c.version = d.version，只查每个文档的当前版本；
+     * 3) kb_id 过滤是权限边界，只搜指定知识库。
+     */
     private List<RetrievalResult> vectorSearch(Long kbId, List<Float> vector, int topK) {
         String vectorLiteral = toVectorString(vector);
+        //<=> 是 pgvector 的余弦距离，距离越小越相似
         return jdbc.query(
                 """
                 SELECT c.id, c.content, c.document_id, c.chunk_index,
@@ -79,11 +104,18 @@ public class HybridSearchService {
                         rs.getDouble("score"),
                         Map.of(
                                 "documentId", rs.getLong("document_id"),
-                                "chunkIndex", rs.getInt("chunk_index"))),
+                        "chunkIndex", rs.getInt("chunk_index"))),
                 vectorLiteral, kbId, vectorLiteral, topK);
     }
 
+    /**
+     * 关键词检索：pg_trgm 相似度 + ILIKE 精确包含。
+     * ILIKE 抓专有名词/编号/API 名的精确命中，similarity 做模糊兜底，
+     * 两个条件 OR 避免输入稍有出入就漏召回；同样带 kb_id 与版本过滤。
+     */
     private List<RetrievalResult> keywordSearch(Long kbId, String query, int topK) {
+        //ILIKE '%query%'精确包含
+        //similarity(content, query) > 0.1：模糊兜底，此方法对于中文基本无效，仅对于漏写字母，大小写错误等能正常识别
         return jdbc.query(
                 """
                 SELECT c.id, c.content, c.document_id, c.chunk_index,
@@ -101,12 +133,20 @@ public class HybridSearchService {
                         rs.getDouble("score"),
                         Map.of(
                                 "documentId", rs.getLong("document_id"),
-                                "chunkIndex", rs.getInt("chunk_index"))),
+                        "chunkIndex", rs.getInt("chunk_index"))),
                 query, kbId, query, query, topK);
     }
 
+    /**
+     * 精排：把融合后的候选文本交给 cross-encoder 重新打分。
+     * 把问题和文档拼成一句话整体输入模型（[CLS] 问题 [SEP] 这段文本），模型直接输出一个 0~1 的相关性分数。
+     * 因为模型能看到问题和文本每个词之间的交互（注意力可以跨句子比对），打分比向量相似度准得多。代价是每一对（问题, 文档）都要单独算一次，没法预计算，慢。
+     * 返回的 (index, score) 中 index 指向传入的 contents 列表，
+     * 回映射时只替换 score，chunkId/content/metadata（引用溯源）原样保留。
+     */
     private List<RetrievalResult> rerank(String query, List<RetrievalResult> fused, int topK) {
         List<String> contents = fused.stream().map(RetrievalResult::content).toList();
+        // top_n 不能超过候选数，否则 rerank 服务端会报错
         RerankResponse response = rerankClient.rerank(
                 new RerankRequest("siliconflow", null, query, contents, Math.min(topK, contents.size())));
         return response.results().stream()
@@ -118,6 +158,10 @@ public class HybridSearchService {
                 .toList();
     }
 
+    /**
+     * List<Float> -> "[0.1,0.2,0.3]"，供 SQL 的 CAST(? AS vector) 解析。
+     * 不用 List.toString() 是因为它会输出带空格的 "[0.1, 0.2]"，pgvector 严格解析时不兼容。
+     */
     private static String toVectorString(List<Float> vector) {
         StringBuilder sb = new StringBuilder("[");
         for (int i = 0; i < vector.size(); i++) {

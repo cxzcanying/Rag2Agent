@@ -8,18 +8,25 @@ package com.rag2agent.rag.core.retrieval.impl;
  *   <li>HYBRID：其余情况 → 混合检索。</li>
  * </ul>
  * 后续可由小模型分类器替换，当前规则版足够覆盖常见场景并省一次 embedding 调用。
+ *
+ * @author 21311
  */
 public final class QueryRouter {
 
     private static final int KEYWORD_MAX_LENGTH = 12;
 
+
     public enum Route {
+        //SEMANTIC：含疑问词（什么/如何/为什么等），语义型问题
         KEYWORD,
+        //KEYWORD：短词/编号/专有名词（≤12 字符且非问句）
         SEMANTIC,
+        //HYBRID：其余情况
         HYBRID
     }
 
-    private QueryRouter() {}
+    private QueryRouter() {
+    }
 
     public static Route route(String query) {
         String q = query == null ? "" : query.trim();

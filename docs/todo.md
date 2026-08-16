@@ -35,3 +35,9 @@
 - [ ] **MinIO 下载全量读内存**（MinioStorageService.download）：`readAllBytes` 在 50MB 上限时内存峰值高，可改流式下载 + 解析。
 - [ ] **知识库列表未按 owner 过滤**（KnowledgeBaseService.list）：ACL 未实现，后续按 owner_user_id 过滤。
 - [ ] **登录接口无限流/失败锁定**（AuthController）：后续 Phase 6 加用户级限流与失败次数锁定。
+- [ ] **查询增强实验：HyDE / Query Rewriting**（HybridSearchService.search）
+  - 背景：疑问句直接向量化时，问题与文档（陈述句）在向量空间存在距离；HyDE 先让 LLM 生成"假设答案"再向量化检索，Query Rewriting 把问题改写为关键词句。
+  - 方案：D13 评测阶段跑 A/B 对比（同一评测集：直接向量检索 vs HyDE 改写后检索），Hit@k/MRR 明显提升且成本可接受再接入；注意假设答案幻觉可能带偏检索方向。
+- [ ] **中文关键词路增强：zhparser / pg_jieba 分词**（keywordSearch）
+  - 背景：pg_trgm 按字符三元组匹配，对中文基本无语义能力（两字词 trigram 太少、同义表达失效），只对编号/API 名等精确字面有效。
+  - 方案：D13 评测阶段 A/B 对比（pg_trgm vs 中文分词 + tsvector/ts_rank），中文关键词路 Hit@k/MRR 明显提升再接入；备选 OpenSearch（成本更高）。
