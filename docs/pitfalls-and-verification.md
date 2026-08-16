@@ -189,6 +189,52 @@ netstat -ano | findstr ":5439"
 解决：把 PostgreSQL 宿主映射改为不常见端口 `15432:5432`，并同步修改 `application-dev.yml` 数据源 URL。
 教训：Windows + Docker Desktop 下不要死磕"标准端口"，换高位不常见端口最省事；这个坑与代码无关，属环境问题。
 
+## 4. D8-D10 检索链路：混合检索、RRF、Rerank 与踩坑
+
+### 实现范围
+
+- 向量检索：pgvector 余弦相似度，SQL 里 `1 - (embedding <=> CAST(? AS vector))`；
+- 关键词检索：pg_trgm 的 `similarity` + `ILIKE` 模糊包含；
+- 融合：RRF（Reciprocal Rank Fusion），k=60，同名 chunk 跨路累加去重；
+- 精排：bge-reranker-v2-m3 cross-encoder；
+- 路由：规则版 QueryRouter（疑问句→语义，短词/编号→关键词，其余→混合）；
+- 引用溯源：RetrievalResult.metadata 带 documentId / chunkIndex；
+- 权限边界：SQL 按 kb_id 过滤；版本正确性靠 `c.version = d.version` join 只查当前版本。
+
+验证：查询"Python 的数据类型有哪些"，命中廖雪峰教程"1.1 数据类型和变量"，score≈0.99，溯源 documentId/chunkIndex 正常。
+
+### 坑 1：Windows 保留端口范围是动态的，会"吃掉"新端口
+
+现象：后端反复报 `Port 8080/8081 already in use`，但 `netstat` 查不到任何本地 LISTEN 进程。
+
+根因：Hyper-V/WSL 的保留端口范围会随重启**动态变化**。这次重启后范围变成 `7989-8088`，正好覆盖 8080/8081；
+之前查 `excludedportrange` 时 8080 不在范围，所以容易被误导成"有隐藏进程占端口"。
+
+排查命令：
+
+```powershell
+netsh interface ipv4 show excludedportrange protocol=tcp
+netstat -ano | findstr ":8080"
+```
+
+解决：后端端口改到高位 `18080`（application.yml + vite proxy 同步），并意识到这个坑和 Docker 端口绑定失败是同一根因。
+经验：报"端口占用但查不到进程"先看 excludedportrange，别死磕进程排查。
+
+### 坑 2：pg_trgm 需要手动装扩展
+
+现象：关键词检索 SQL 用 `similarity()` 时报函数不存在。
+
+原因：pgvector 在 init SQL 里建了，但 pg_trgm 没建。
+
+解决：运行库执行 `CREATE EXTENSION IF NOT EXISTS pg_trgm;`，并同步补进 `docker/postgres/init/001_extensions.sql`（新环境自动装）。
+
+### 坑 3：Rerank 低分候选仍会被返回
+
+现象：RRF 融合后取 topK 交给 rerank，rerank 只返回前 topK 个，即使绝对分数很低（如 0.0045）也会作为最后一名返回。
+
+说明：这是召回质量的上游问题——融合阶段能进入候选的就不够好，rerank 只是精排不改召回。
+改进方向（评测阶段）：加 rerank 分数阈值过滤；优化关键词路的中文分词（pg_trgm 对中文效果弱，考虑 zhparser/ES）。
+
 ## 4. 入库幂等：从"先删后插"到"版本化快照"（技术选型记录）
 
 ### 问题来源：消息一定会重复
