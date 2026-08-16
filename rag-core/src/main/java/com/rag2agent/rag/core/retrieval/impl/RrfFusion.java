@@ -8,7 +8,7 @@ import java.util.Map;
 
 /**
  * RRF（Reciprocal Rank Fusion）多路召回融合。
- * 对每一路排序结果，排名第 rank 的文档贡献 1/(k + rank + 1)，k 取 60。
+ * 对每一路排序结果，排名第 rank 的文档贡献 1/(k + rank + 1)，k 取 60（决定"排名差距"被放大多少）。
  * 同一 chunk 出现在多路时分数累加，实现去重 + 综合排序。
  * @author 21311
  */
