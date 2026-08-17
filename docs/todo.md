@@ -13,6 +13,9 @@
 - [ ] **消息只携带 documentId，未携带 taskId**（IngestMessageService）
   - 问题：消费端 `latestByDocument` 取"最新任务"，同一文档存在多个任务（重复上传 + 失败遗留）时，重试可能处理到错误任务。
   - 方案：消息体改为 `{documentId, taskId}`，process 按 taskId 直接定位任务。
+- [x] **Agent 审批并发无防护**（AgentRunService.approve）✅ 已修复
+  - 问题：并发审批同一 runId 会重复执行工具、重复向消息历史追加工具结果，模型上下文被污染。
+  - 方案：CAS 抢占——approve 前把 run 状态从 WAITING_APPROVAL 置为 EXECUTING，影响行数为 0 则拒绝。已落地。
 
 ## P1 数据一致性 / 边界
 
@@ -64,6 +67,9 @@
 - [ ] **AuthService.register 并发竞态**（selectCount + insert 非原子）
   - 问题：并发注册同名用户可能同时通过 selectCount 检查，靠 DB 唯一约束兜底会抛 500 而非友好错误。
   - 方案：username 建唯一约束并捕获 DuplicateKeyException 转 BAD_REQUEST，或注册加分布式锁。
-- [ ] **检索/文档接口缺 kbId 归属校验（越权）**（SearchController / DocumentController / KnowledgeBaseController）
-  - 问题：登录校验已由全局 Sa-Token 拦截器覆盖（`SaInterceptor` 拦截 `/**`，仅放行 auth/health/version/ai/swagger），但接口只按 kbId 过滤，未校验 kbId 归属当前用户，登录用户可越权访问他人知识库。
-  - 方案：检索/文档链路增加 kb_id → owner 归属校验，与 KnowledgeBaseService.list 的 ACL 同批落地。
+- [ ] **检索/文档/Agent 链路缺 kbId 归属校验（越权）**（SearchController / DocumentController / Agent 工具层 / 审批接口）
+  - 问题：登录校验已由全局 Sa-Token 拦截器覆盖，但接口只按 kbId/documentId 过滤：检索接口可查任意 kb_id；`search_knowledge_base` 工具用模型传入的 kb_id 检索；`delete_document` 工具可删任意 document_id；`/api/agent/approvals/{runId}` 不校验 run 归属当前用户。登录用户可越权访问他人知识库、审批他人操作。
+  - 方案：统一 ACL——kb_id → owner、document → kb → owner、run → user 归属校验，与 KnowledgeBaseService.list 的 ACL 同批落地。
+- [ ] **只读工具调用未落库审计**（AgentRunService.executeLoop）
+  - 问题：非审批工具（search_knowledge_base）执行时只推送 tool_start 事件，未写 tool_call 表，工具调用轨迹不完整。
+  - 方案：所有工具调用统一落库（status SUCCEEDED/FAILED），审批工具沿用 WAITING_APPROVAL 流程。
