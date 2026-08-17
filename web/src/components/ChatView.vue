@@ -1,14 +1,30 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { agent, knowledgeBases } from '../api'
 
-const kbId = ref('')
+const STORAGE_KEY = 'rag2agent_chat_messages'
+const KB_STORAGE_KEY = 'rag2agent_chat_kb_id'
+
+const kbId = ref(localStorage.getItem(KB_STORAGE_KEY) || '')
 const kbList = ref([])
 const question = ref('')
 const sending = ref(false)
-const messages = ref([])
+const messages = ref(loadMessages())
 const pendingApproval = ref(null)
+
+function loadMessages() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+// 对话历史与所选知识库持久化到 localStorage，刷新不丢
+watch(messages, (value) => localStorage.setItem(STORAGE_KEY, JSON.stringify(value)), { deep: true })
+watch(kbId, (value) => localStorage.setItem(KB_STORAGE_KEY, value || ''))
 
 onMounted(async () => {
   try {

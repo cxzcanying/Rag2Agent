@@ -350,3 +350,13 @@ RocketMQ 是 at-least-once 语义，消息重复投递有三个现实来源：
 解决：Redis 宿主端口改 `16379:6379`，并同步改 `application-dev.yml` 的 `spring.data.redis.port`（dev profile 会覆盖 application.yml，只改主配置不生效）。
 
 教训：排查"容器 healthy 但应用连不上"先看宿主端口是不是真被本机其他进程占着；`application-dev.yml` 里写死的端口优先级高于主配置。
+
+## 9. D11 联调：SseEmitter 用法不当导致 SSE 流被"掐断"
+
+现象：后端 run 已 COMPLETED、SSE 事件（reference/done）都发出去了，但浏览器 fetch 一直挂起（输入框持续 loading、不出答案），curl -N 却正常。
+
+排查：用 Node fetch（undici，与浏览器 fetch 行为一致）直连和走 vite 代理都能复现——事件收得到，但流不结束，报 `TypeError: terminated` / `SocketError: other side closed`。根因是 SseEmitter 用法错误：controller 在**返回 emitter 之前**就同步执行完整个 Agent 循环并调用 `complete()`，响应头还没提交就结束了异步处理，Tomcat 直接关闭连接，客户端拿不到正常的 chunked 终止块，fetch 把连接关闭当成异常而不是正常 EOF。
+
+解决：弃用 SseEmitter，改用 `HttpServletResponse` + `PrintWriter` 手动写 SSE——每个事件写 `event:` / `data:` 行并 `flush()`，方法正常返回后 Tomcat 发送完整的流终止信号。虚拟线程下同步阻塞式编排完全可行。
+
+教训：SseEmitter 的正确用法是"先返回 emitter，再在其他线程里 send/complete"；同步阻塞式编排不要用 SseEmitter，直接写响应流更可控，也更容易排查。

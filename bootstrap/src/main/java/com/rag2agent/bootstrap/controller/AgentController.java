@@ -9,6 +9,9 @@ import com.rag2agent.bootstrap.dto.AgentDtos.ApprovalRequest;
 import com.rag2agent.bootstrap.dto.AgentDtos.ChatRequest;
 import com.rag2agent.framework.common.ApiResponse;
 import jakarta.validation.Valid;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.io.PrintWriter;
 import java.util.UUID;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -16,7 +19,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
  * Agent 对话接口：POST /api/chat 走 SSE 推送结构化事件；审批接口同步返回结果。
@@ -34,22 +36,28 @@ public class AgentController {
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter chat(@RequestBody @Valid ChatRequest request) {
+    public void chat(@RequestBody @Valid ChatRequest request, HttpServletResponse response) throws IOException {
         Long userId = StpUtil.getLoginIdAsLong();
         String sessionId = request.sessionId() == null || request.sessionId().isBlank()
                 ? UUID.randomUUID().toString()
                 : request.sessionId();
-        SseEmitter emitter = new SseEmitter(180_000L);
+        // 手动写 SSE 流：每个事件立即 flush，方法正常结束后 Tomcat 发送完整的 chunked 终止块，
+        // 客户端 fetch 才能拿到"流正常结束"而不是"连接被掐断"。
+        response.setContentType(MediaType.TEXT_EVENT_STREAM_VALUE);
+        response.setCharacterEncoding("UTF-8");
+        response.setHeader("Cache-Control", "no-cache");
+        response.setHeader("Connection", "keep-alive");
+        PrintWriter writer = response.getWriter();
 
         try {
             agentRunService.start(
                     userId, sessionId, request.query(), request.kbId(),
-                    event -> sendEvent(emitter, event));
-            emitter.complete();
+                    event -> sendEvent(writer, event));
         } catch (Exception e) {
-            emitter.completeWithError(e);
+            // 响应可能已部分提交，只能以 SSE 事件形式返回错误
+            sendEvent(writer, new AgentEvent("error", e.getMessage()));
         }
-        return emitter;
+        writer.flush();
     }
 
     @PostMapping("/agent/approvals/{runId}")
@@ -59,10 +67,11 @@ public class AgentController {
         return ApiResponse.success(result);
     }
 
-    private void sendEvent(SseEmitter emitter, AgentEvent event) {
+    private void sendEvent(PrintWriter writer, AgentEvent event) {
         try {
-            String json = objectMapper.writeValueAsString(event);
-            emitter.send(SseEmitter.event().name("message").data(json, MediaType.APPLICATION_JSON));
+            writer.write("event:message\n");
+            writer.write("data:" + objectMapper.writeValueAsString(event) + "\n\n");
+            writer.flush();
         } catch (Exception ignored) {
             // 客户端断开时忽略，避免影响主流程
         }

@@ -14,6 +14,9 @@ dist/
 .vscode/
 *.iml
 
+# Playwright 调试产物
+.playwright-cli/
+
 # Logs
 logs/
 *.log
