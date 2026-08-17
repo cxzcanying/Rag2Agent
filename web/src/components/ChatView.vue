@@ -1,13 +1,22 @@
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { agent } from '../api'
+import { agent, knowledgeBases } from '../api'
 
 const kbId = ref('')
+const kbList = ref([])
 const question = ref('')
 const sending = ref(false)
 const messages = ref([])
 const pendingApproval = ref(null)
+
+onMounted(async () => {
+  try {
+    kbList.value = await knowledgeBases.list()
+  } catch {
+    // 列表加载失败时仍可手填，不阻塞
+  }
+})
 
 async function send() {
   if (!kbId.value || !question.value.trim()) {
@@ -70,7 +79,9 @@ async function approve(approved) {
 <template>
   <el-card class="chat-view">
     <div class="chat-toolbar">
-      <el-input v-model="kbId" placeholder="知识库 ID" style="width: 180px" />
+      <el-select v-model="kbId" placeholder="选择知识库" style="width: 220px">
+        <el-option v-for="kb in kbList" :key="kb.id" :label="kb.name" :value="kb.id" />
+      </el-select>
     </div>
 
     <div class="messages">
