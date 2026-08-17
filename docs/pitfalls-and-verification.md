@@ -301,3 +301,32 @@ RocketMQ 是 at-least-once 语义，消息重复投递有三个现实来源：
 - 方案 3 已在写入侧落地，检索侧"按当前版本过滤"待实现；
 - 文档更新/重新入库接口未来做（现在每次上传是新 document）；
 - 单文档 chunk 达数千级、全量重插变慢时，可再评估方案 2 的 upsert 作为增量优化，但语义上仍是"版本整体替换"。
+
+## 5. D11 函数调用（function calling）真实验证
+
+> 验证时间 2026-08-17。用 PowerShell 直连 DeepSeek（`deepseek-v4-flash`），工具声明 `delete_document(document_id:integer)`，问题"请帮我删除文档 123"。
+
+### 结论：支持 function calling，且有两个实操必知点
+
+非流式：`finish_reason=tool_calls`，`message.tool_calls[0].function.arguments` 是 JSON **字符串** `{"document_id":123}`（不是对象）。
+
+流式返回两个关键事实：
+
+1. **`delta.reasoning_content` 独立字段**：DeepSeek 会在 `content` 之外先流式输出一段推理文本（本例是 "The user asks to delete document 123. Let me delete it."），放在 `reasoning_content` 里逐片返回，此时 `content` 为 null；最后的 `usage` 里也单列了 `reasoning_tokens`。如果解析器只读 `delta.content`，会完全丢推理内容，甚至不知道还有这个字段。
+2. **`tool_calls` 的 `arguments` 跨 chunk 分片**：第一个 tool_calls 分片带全 `index/id/type/function.name`，`arguments` 为空串；后续分片只带 `function.arguments` 的碎片（`{`、`"document_id"`、`: `、`123`、`}`），需要按 `index` 分组、按顺序累加拼接成完整 JSON 再解析。
+
+### 对实现的影响
+
+- 流式解析必须支持 `tool_calls` 分片聚合（按 `index` 归组、`arguments` 累加），不能只处理纯文本 `content`。
+- 需要决定 `reasoning_content` 是否透出：透出则前端可展示思考过程，但会多一类事件与成本；不透出则忽略该字段，只取 `content`。
+- function calling 循环：模型返回 `tool_calls` → 执行工具 → 结果以 `role:tool` + `tool_call_id` 回传 → 模型继续，直到 `finish_reason=stop`。
+
+## 6. D11 Agent 阶段：RocketMQ 9876 端口也被保留
+
+现象：Docker Desktop 重启后 `docker compose up -d`，RocketMQ namesrv 绑定失败，报 `Ports are not available ... 9876`，broker 因 `depends_on namesrv healthy` 也跟着起不来。
+
+原因：`netsh interface ipv4 show excludedportrange protocol=tcp` 显示保留区间 `9849-9948`，9876 正好落在里面。这是第 4 节坑 1 / 坑 4 同一根因的延续——保留区间随重启动态变化，这次轮到了 9876。
+
+解决：docker-compose 里 namesrv 宿主端口改 `19876:9876`，`.env` 加 `ROCKETMQ_NAMESRV=localhost:19876`（producer/consumer 的 `@Value` 默认值是 `localhost:9876`）。broker 通过容器内网连 `namesrv:9876`，不受影响。
+
+教训：这台机器凡是"标准端口"都可能随时被保留区间吃掉，宿主映射一律优先选 15xxx/17xxx/18xxx/19xxx 高位端口。

@@ -57,7 +57,7 @@ services:
     environment:
       JAVA_OPT_EXT: "-server -Xms512m -Xmx512m -Xmn256m"
     ports:
-      - "9876:9876"
+      - "19876:9876"
     volumes:
       - rocketmq-namesrv-logs:/root/logs
     healthcheck:

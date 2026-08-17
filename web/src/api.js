@@ -40,3 +40,42 @@ export const documents = {
   list: (kbId) => request('/documents?kbId=' + kbId),
   presign: (id) => request('/documents/' + id + '/presign')
 }
+
+export const agent = {
+  chat: async (body, onEvent) => {
+    const headers = { 'Content-Type': 'application/json' }
+    const t = getToken()
+    if (t) headers.satoken = t
+    const resp = await fetch(BASE + '/chat', { method: 'POST', headers, body: JSON.stringify(body) })
+    const contentType = resp.headers.get('content-type') || ''
+    if (!resp.ok || !contentType.includes('text/event-stream')) {
+      const json = await resp.json().catch(() => ({}))
+      throw new Error(json.message || '对话请求失败')
+    }
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (trimmed.startsWith('data:')) {
+          const data = trimmed.slice(5).trim()
+          if (data && data !== '[DONE]') {
+            try {
+              onEvent(JSON.parse(data))
+            } catch {
+              // 忽略无法解析的分片
+            }
+          }
+        }
+      }
+    }
+  },
+  approve: (runId, approved) =>
+    request('/agent/approvals/' + runId, { method: 'POST', body: JSON.stringify({ approved }) })
+}
