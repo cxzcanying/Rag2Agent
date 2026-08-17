@@ -330,3 +330,23 @@ RocketMQ 是 at-least-once 语义，消息重复投递有三个现实来源：
 解决：docker-compose 里 namesrv 宿主端口改 `19876:9876`，`.env` 加 `ROCKETMQ_NAMESRV=localhost:19876`（producer/consumer 的 `@Value` 默认值是 `localhost:9876`）。broker 通过容器内网连 `namesrv:9876`，不受影响。
 
 教训：这台机器凡是"标准端口"都可能随时被保留区间吃掉，宿主映射一律优先选 15xxx/17xxx/18xxx/19xxx 高位端口。
+
+## 7. D11 联调：JSONB 列不能直接存非 JSON 文本
+
+现象：对话一问就断流，后端日志报 `ERROR: invalid input syntax for type json, Token "关于内卷的看法" is invalid`。
+
+原因：`agent_step.input` / `tool_call.output` 是 JSONB 列，AgentRunService 落库时直接把用户 query 和工具返回的纯文本塞进去，SQL 里 `CAST(#{input} AS jsonb)` 对非 JSON 文本直接报错，SSE 流中断。
+
+解决：落库前统一 `toJson(...)`——query 序列化成 `"关于内卷的看法"`，工具输出也包成 JSON 字符串；错误信息走 TEXT 类型的 `error_message` 列。
+
+教训：JSONB 列只能存合法 JSON，任何要入 JSONB 的值都要先序列化，别想当然塞原始文本。
+
+## 8. D11 联调：Redis 6379 被 Windows 系统服务抢占
+
+现象：后端连 Redis 报 `Unable to connect to localhost:6379` / `Connection reset`，但 `docker exec redis-cli ping` 返回 PONG、容器 healthy。
+
+排查：`netstat -ano | findstr ":6379"` 发现两个进程监听 6379——com.docker.backend（Docker 转发）和 svchost（PID 6916，Windows 系统服务）；TCP 直连 127.0.0.1:6379 发 Redis PING 无响应，说明宿主端口被系统服务抢占，后端连到的是它而不是 Redis。
+
+解决：Redis 宿主端口改 `16379:6379`，并同步改 `application-dev.yml` 的 `spring.data.redis.port`（dev profile 会覆盖 application.yml，只改主配置不生效）。
+
+教训：排查"容器 healthy 但应用连不上"先看宿主端口是不是真被本机其他进程占着；`application-dev.yml` 里写死的端口优先级高于主配置。
