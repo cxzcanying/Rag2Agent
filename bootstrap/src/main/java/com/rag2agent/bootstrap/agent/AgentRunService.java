@@ -131,7 +131,7 @@ public class AgentRunService {
             try {
                 output = executeTool(pending.getToolName(), parseArguments(pending.getInput()));
                 pending.setStatus("SUCCEEDED");
-                pending.setOutput(output);
+                pending.setOutput(toJson(output));
             } catch (Exception e) {
                 output = "工具执行失败: " + e.getMessage();
                 pending.setStatus("FAILED");
@@ -143,7 +143,7 @@ public class AgentRunService {
             messages.add(ChatMessage.tool(toolCallId, pending.getToolName(), output));
         } else {
             pending.setStatus("REJECTED");
-            pending.setOutput("用户拒绝执行");
+            pending.setOutput(toJson("用户拒绝执行"));
             toolCallMapper.updateResult(pending);
             messages.add(ChatMessage.assistantWithToolCalls(List.of(
                     new ToolCall(toolCallId, "function", pending.getToolName(), pending.getInput()))));
@@ -234,7 +234,7 @@ public class AgentRunService {
         step.setSeq(0);
         step.setStepType("RETRIEVE");
         step.setStatus("SUCCEEDED");
-        step.setInput(query);
+        step.setInput(toJson(query));
         step.setOutput(toJson(Map.of("count", references.size())));
         stepMapper.insert(step);
         return references;
