@@ -12,6 +12,7 @@ const question = ref('')
 const sending = ref(false)
 const messages = ref(loadMessages())
 const pendingApproval = ref(null)
+const processStage = ref('')
 
 function loadMessages() {
   try {
@@ -46,6 +47,7 @@ async function send() {
   messages.value.push(assistant)
   sending.value = true
   pendingApproval.value = null
+  processStage.value = '正在处理你的问题...'
 
   try {
     await agent.chat({ kbId: Number(kbId.value), query: q }, (event) => handleEvent(assistant, event))
@@ -53,6 +55,9 @@ async function send() {
     assistant.content = '请求失败：' + e.message
   } finally {
     sending.value = false
+    if (!processStage.value) {
+      processStage.value = ''
+    }
   }
 }
 
@@ -60,18 +65,23 @@ function handleEvent(msg, event) {
   switch (event.type) {
     case 'reference':
       msg.references = event.data || []
+      processStage.value =
+        event.data && event.data.length ? '已找到相关资料，正在阅读...' : '正在检索知识库资料...'
       break
     case 'tool_start':
-      msg.tools.push({ name: event.data?.name || '工具', status: '执行中' })
+      processStage.value = '正在查阅更多资料...'
       break
     case 'approval_required':
       pendingApproval.value = event.data
+      processStage.value = ''
       break
     case 'done':
+      processStage.value = ''
       msg.content = event.data?.answer || ''
       msg.references = event.data?.references || msg.references
       break
     case 'error':
+      processStage.value = ''
       msg.content = '执行出错：' + event.data
       break
   }
@@ -82,12 +92,15 @@ async function approve(approved) {
   const approval = pendingApproval.value
   pendingApproval.value = null
   const assistant = messages.value[messages.value.length - 1]
+  processStage.value = approved ? '操作已批准，正在继续处理...' : '操作已拒绝，正在继续处理...'
   try {
     const result = await agent.approve(approval.runId, approved)
     assistant.content = result.answer || (approved ? '操作已完成' : '操作已被拒绝')
     assistant.references = result.references || assistant.references
   } catch (e) {
     ElMessage.error(e.message)
+  } finally {
+    processStage.value = ''
   }
 }
 </script>
@@ -128,6 +141,11 @@ async function approve(approved) {
           <el-button type="danger" size="small" @click="approve(true)">批准</el-button>
           <el-button size="small" @click="approve(false)">拒绝</el-button>
         </div>
+      </div>
+
+      <div v-if="processStage" class="process-stage">
+        <span class="spinner"></span>
+        {{ processStage }}
       </div>
     </div>
 
@@ -220,6 +238,31 @@ async function approve(approved) {
   margin-top: 10px;
   display: flex;
   gap: 8px;
+}
+.process-stage {
+  margin: 12px 0;
+  padding: 10px 14px;
+  background: #f5f7fa;
+  border-radius: 8px;
+  color: #606266;
+  font-size: 14px;
+  text-align: left;
+}
+.spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 2px solid #e0e0e0;
+  border-top-color: #409eff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+  margin-right: 8px;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .input-row {
   display: flex;
