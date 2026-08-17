@@ -55,4 +55,10 @@ public interface DocumentChunkMapper {
     @Delete("DELETE FROM document_chunk WHERE document_id = #{documentId} AND version < #{version}")
     int deleteBelowVersion(
             @Param("documentId") Long documentId, @Param("version") int version);
+
+    /**
+     * 删除文档的所有 chunk（不分版本），供 delete_document 工具使用。
+     */
+    @Delete("DELETE FROM document_chunk WHERE document_id = #{documentId}")
+    int deleteByDocument(@Param("documentId") Long documentId);
 }
