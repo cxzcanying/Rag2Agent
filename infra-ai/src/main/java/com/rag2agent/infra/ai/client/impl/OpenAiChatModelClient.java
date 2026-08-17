@@ -11,10 +11,14 @@ import com.rag2agent.infra.ai.exception.AiClientException;
 import com.rag2agent.infra.ai.model.ChatCompletionRequest;
 import com.rag2agent.infra.ai.model.ChatCompletionResponse;
 import com.rag2agent.infra.ai.model.ChatMessage;
+import com.rag2agent.infra.ai.model.ToolCall;
+import com.rag2agent.infra.ai.model.ToolDef;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.concurrent.TimeUnit;
@@ -55,11 +59,19 @@ public class OpenAiChatModelClient implements ChatModelClient {
     public ChatCompletionResponse complete(ChatCompletionRequest request) {
         try (Response response = post(buildBody(request, false))) {
             JsonNode json = mapper.readTree(response.body().string());
-            String content = json.path("choices").path(0).path("message").path("content").asText("");
+            String content = json.path("choices").path(0).path("message").path("content").asText(null);
             String finishReason = json.path("choices").path(0).path("finish_reason").asText(null);
             Map<String, Object> usage = mapper.convertValue(
                     json.path("usage"), new TypeReference<Map<String, Object>>() {});
-            return new ChatCompletionResponse(content, finishReason, usage);
+            List<ToolCall> toolCalls = new ArrayList<>();
+            for (JsonNode tc : json.path("choices").path(0).path("message").path("tool_calls")) {
+                toolCalls.add(new ToolCall(
+                        tc.path("id").asText(null),
+                        tc.path("type").asText("function"),
+                        tc.path("function").path("name").asText(null),
+                        tc.path("function").path("arguments").asText(null)));
+            }
+            return new ChatCompletionResponse(content, finishReason, usage, toolCalls);
         } catch (IOException e) {
             throw new AiClientException("Chat 调用失败: " + e.getMessage(), e);
         }
@@ -124,14 +136,39 @@ public class OpenAiChatModelClient implements ChatModelClient {
         ArrayNode messages = root.putArray("messages");
         for (ChatMessage message : request.messages()) {
             ObjectNode node = messages.addObject();
-            //system/user/assistant 三选一
-            /*
-            system：给模型设定"人设和规则"的指令，不参与对话，但优先级最高。
-            user：用户说的话、问的问题。
-            assistant：模型之前的回答。
-             */
             node.put("role", message.role());
-            node.put("content", message.content());
+            if (message.content() != null) {
+                node.put("content", message.content());
+            }
+            if (message.name() != null) {
+                node.put("name", message.name());
+            }
+            if (message.toolCallId() != null) {
+                node.put("tool_call_id", message.toolCallId());
+            }
+            if (message.toolCalls() != null && !message.toolCalls().isEmpty()) {
+                ArrayNode toolCalls = node.putArray("tool_calls");
+                for (ToolCall tc : message.toolCalls()) {
+                    ObjectNode tcNode = toolCalls.addObject();
+                    tcNode.put("id", tc.id());
+                    tcNode.put("type", tc.type() == null ? "function" : tc.type());
+                    ObjectNode fn = tcNode.putObject("function");
+                    fn.put("name", tc.name());
+                    fn.put("arguments", tc.arguments());
+                }
+            }
+        }
+
+        if (request.tools() != null && !request.tools().isEmpty()) {
+            ArrayNode tools = root.putArray("tools");
+            for (ToolDef tool : request.tools()) {
+                ObjectNode t = tools.addObject();
+                t.put("type", "function");
+                ObjectNode fn = t.putObject("function");
+                fn.put("name", tool.name());
+                fn.put("description", tool.description());
+                fn.set("parameters", mapper.valueToTree(tool.parameters()));
+            }
         }
 
         //请求里可以额外带 temperature（控制随机性）、max_tokens（限制输出长度）等

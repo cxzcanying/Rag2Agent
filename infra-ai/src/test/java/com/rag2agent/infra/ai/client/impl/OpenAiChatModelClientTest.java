@@ -2,11 +2,14 @@ package com.rag2agent.infra.ai.client.impl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rag2agent.infra.ai.config.AiProviderProperties.Provider;
 import com.rag2agent.infra.ai.model.ChatCompletionRequest;
 import com.rag2agent.infra.ai.model.ChatCompletionResponse;
 import com.rag2agent.infra.ai.model.ChatMessage;
+import com.rag2agent.infra.ai.model.ToolCall;
+import com.rag2agent.infra.ai.model.ToolDef;
 import java.util.List;
 import java.util.Map;
 import okhttp3.mockwebserver.MockResponse;
@@ -70,6 +73,59 @@ class OpenAiChatModelClientTest {
         String sent = server.takeRequest().getBody().readUtf8();
         assertNotNull(sent);
         assertEquals(true, sent.contains("\"model\":\"custom-model\""));
+    }
+
+    @Test
+    void complete_parsesToolCalls() {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {
+                          "choices": [{
+                            "message": {
+                              "role": "assistant",
+                              "content": null,
+                              "tool_calls": [{
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "delete_document", "arguments": "{\\"document_id\\":123}"}
+                              }]
+                            },
+                            "finish_reason": "tool_calls"
+                          }],
+                          "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+                        }
+                        """));
+
+        ChatCompletionResponse response = client.complete(new ChatCompletionRequest(
+                "deepseek", null, List.of(new ChatMessage("user", "删除文档 123")), Map.of()));
+
+        assertEquals("tool_calls", response.finishReason());
+        assertEquals(1, response.toolCalls().size());
+        assertEquals("delete_document", response.toolCalls().getFirst().name());
+        assertEquals("{\"document_id\":123}", response.toolCalls().getFirst().arguments());
+    }
+
+    @Test
+    void complete_serializesToolsAndToolResult() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"choices\":[{\"message\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}"));
+
+        List<ChatMessage> messages = List.of(
+                new ChatMessage("user", "hi"),
+                ChatMessage.assistantWithToolCalls(List.of(
+                        new ToolCall("call_1", "function", "delete_document", "{\"document_id\":123}"))),
+                ChatMessage.tool("call_1", "delete_document", "ok"));
+        List<ToolDef> tools = List.of(new ToolDef("delete_document", "删除文档", Map.of("type", "object")));
+
+        client.complete(new ChatCompletionRequest("deepseek", null, messages, Map.of(), tools));
+
+        String sent = server.takeRequest().getBody().readUtf8();
+        assertTrue(sent.contains("\"tools\""), "请求应包含 tools 声明");
+        assertTrue(sent.contains("\"tool_calls\""), "请求应包含 assistant 的 tool_calls");
+        assertTrue(sent.contains("\"tool_call_id\":\"call_1\""), "请求应包含 tool 消息的 tool_call_id");
+        assertTrue(sent.contains("\"name\":\"delete_document\""), "请求应包含工具名");
     }
 
     @Test
