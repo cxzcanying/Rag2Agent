@@ -48,7 +48,7 @@ public class AgentRunService {
     private static final String SYSTEM_PROMPT = """
             你是一个企业知识库问答助手。回答必须基于检索到的知识库内容，并标注引用编号（如 [1]）。
             如果检索结果不足以回答，如实说明"未找到相关资料"，不要编造。
-            当用户要求删除文档时，调用 delete_document 工具；该操作需要人工审批。
+            当用户要求删除文档时，即使检索结果为空也要调用 delete_document 工具；该操作需要人工审批。
             """;
 
     private final ChatModelClient chatClient;
@@ -96,13 +96,14 @@ public class AgentRunService {
         updateStatus(run.getId(), "ROUTING");
         List<Reference> references = searchAndRecord(run.getId(), kbId, query, onEvent);
         if (references.isEmpty()) {
-            // 无引用不答：不把空上下文交给模型，直接返回未找到
-            updateStatus(run.getId(), "COMPLETED");
-            String answer = "未找到相关资料，无法回答该问题。";
-            onEvent.accept(new AgentEvent("done", Map.of("answer", answer, "references", List.of())));
-            return new AgentExecutionResult(run.getId(), "COMPLETED", answer, List.of(), null);
+            // 检索为空时不直接拒绝：把"未检索到内容"交给模型，让它决定是调用工具（如删除文档）还是如实回答未找到。
+            // 直接拦截会导致"删除文档 X"这类操作请求永远进不了工具循环。
+            messages.add(new ChatMessage("user",
+                    "知识库检索结果为空。如果用户要求的是删除/修改等工具操作，请直接调用对应工具；"
+                            + "如果是提问，请如实回答\"未找到相关资料\"，不要编造。"));
+        } else {
+            messages.add(new ChatMessage("user", buildContext(query, references)));
         }
-        messages.add(new ChatMessage("user", buildContext(query, references)));
         saveMessages(run.getId(), messages);
         saveReferences(run.getId(), references);
 

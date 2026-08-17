@@ -360,3 +360,13 @@ RocketMQ 是 at-least-once 语义，消息重复投递有三个现实来源：
 解决：弃用 SseEmitter，改用 `HttpServletResponse` + `PrintWriter` 手动写 SSE——每个事件写 `event:` / `data:` 行并 `flush()`，方法正常返回后 Tomcat 发送完整的流终止信号。虚拟线程下同步阻塞式编排完全可行。
 
 教训：SseEmitter 的正确用法是"先返回 emitter，再在其他线程里 send/complete"；同步阻塞式编排不要用 SseEmitter，直接写响应流更可控，也更容易排查。
+
+## 10. D11 联调：无引用不答会误拦工具操作请求
+
+现象：用户输入"删除文档 8"直接返回"未找到相关资料，无法回答该问题"，没有触发 delete_document 审批弹窗。
+
+原因：`AgentRunService.start` 在主动检索结果为空时直接 return"未找到"，模型根本没机会进入 function calling 循环。但"删除文档 8"本来就不该从知识库检索到内容——它是一次工具操作，不是问答。
+
+解决：检索为空时不再直接拒绝，而是把"检索结果为空"作为上下文交给模型，让它自己决定：删除/修改等操作类请求直接调用对应工具，问答类请求如实回答"未找到"。system prompt 同步强调"即使检索结果为空，用户要求删除文档也要调用 delete_document"。
+
+教训："无引用不答"防的是模型编造答案，但不应阻止工具调用；RAG 规则要区分"问答"和"工具操作"两类意图，不能一刀切。
