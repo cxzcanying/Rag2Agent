@@ -84,6 +84,7 @@ onMounted(loadKbs)
       </el-dialog>
 
       <el-table :data="docList" style="margin-top: 16px" empty-text="暂无文档，请上传">
+        <el-table-column prop="id" label="ID" width="70" />
         <el-table-column prop="fileName" label="文件名" />
         <el-table-column prop="fileType" label="类型" width="90" />
         <el-table-column prop="fileSize" label="大小" width="120">

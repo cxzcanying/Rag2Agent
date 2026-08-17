@@ -2,6 +2,7 @@ package com.rag2agent.bootstrap.tool.impl;
 
 import com.rag2agent.bootstrap.mapper.DocumentChunkMapper;
 import com.rag2agent.bootstrap.mapper.DocumentMetaMapper;
+import com.rag2agent.bootstrap.mapper.IngestTaskMapper;
 import com.rag2agent.bootstrap.tool.Tool;
 import com.rag2agent.bootstrap.tool.ToolDescriptor;
 import java.util.List;
@@ -16,10 +17,15 @@ public class DeleteDocumentTool implements Tool {
 
     private final DocumentMetaMapper documentMapper;
     private final DocumentChunkMapper chunkMapper;
+    private final IngestTaskMapper ingestTaskMapper;
 
-    public DeleteDocumentTool(DocumentMetaMapper documentMapper, DocumentChunkMapper chunkMapper) {
+    public DeleteDocumentTool(
+            DocumentMetaMapper documentMapper,
+            DocumentChunkMapper chunkMapper,
+            IngestTaskMapper ingestTaskMapper) {
         this.documentMapper = documentMapper;
         this.chunkMapper = chunkMapper;
+        this.ingestTaskMapper = ingestTaskMapper;
     }
 
     @Override
@@ -38,7 +44,8 @@ public class DeleteDocumentTool implements Tool {
     @Override
     public String execute(Map<String, Object> arguments) {
         Long documentId = ((Number) arguments.get("document_id")).longValue();
-        // 先删 chunk 再删 document，避免外键约束
+        // 外键约束顺序：先删 ingest_task，再删 chunk，最后删 document
+        ingestTaskMapper.deleteByDocument(documentId);
         chunkMapper.deleteByDocument(documentId);
         int deleted = documentMapper.deleteById(documentId);
         return deleted == 0
