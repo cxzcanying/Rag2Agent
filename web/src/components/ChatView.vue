@@ -43,7 +43,7 @@ async function send() {
   const q = question.value.trim()
   question.value = ''
   messages.value.push({ role: 'user', content: q })
-  const assistant = { role: 'assistant', content: '', references: [], tools: [] }
+  const assistant = { role: 'assistant', content: '', references: [] }
   messages.value.push(assistant)
   sending.value = true
   pendingApproval.value = null
@@ -116,10 +116,6 @@ async function approve(approved) {
     <div class="messages">
       <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
         <div class="bubble">{{ m.content }}</div>
-
-        <div v-if="m.tools && m.tools.length" class="tools">
-          <el-tag v-for="(t, j) in m.tools" :key="j" size="small" type="warning">{{ t.name }}</el-tag>
-        </div>
 
         <div v-if="m.references && m.references.length" class="references">
           <div class="ref-title">引用来源</div>
@@ -195,11 +191,6 @@ async function approve(approved) {
 }
 .msg.user .bubble {
   background: #d9ecff;
-}
-.tools {
-  margin-top: 6px;
-  display: flex;
-  gap: 6px;
 }
 .references {
   margin-top: 8px;

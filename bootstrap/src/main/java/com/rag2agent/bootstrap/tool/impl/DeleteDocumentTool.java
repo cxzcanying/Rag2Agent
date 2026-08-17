@@ -8,6 +8,7 @@ import com.rag2agent.bootstrap.tool.ToolDescriptor;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 高风险写工具：删除文档及其所有切块，需要人工审批。
@@ -42,6 +43,7 @@ public class DeleteDocumentTool implements Tool {
     }
 
     @Override
+    @Transactional
     public String execute(Map<String, Object> arguments) {
         Long documentId = ((Number) arguments.get("document_id")).longValue();
         // 外键约束顺序：先删 ingest_task，再删 chunk，最后删 document

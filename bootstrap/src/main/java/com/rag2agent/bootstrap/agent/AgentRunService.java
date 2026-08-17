@@ -107,7 +107,7 @@ public class AgentRunService {
         saveMessages(run.getId(), messages);
         saveReferences(run.getId(), references);
 
-        return executeLoop(run.getId(), messages, references, onEvent);
+        return executeLoop(run.getId(), messages, references, run.getMaxIterations(), onEvent);
     }
 
     public AgentExecutionResult approve(Long runId, boolean approved, Consumer<AgentEvent> onEvent) {
@@ -115,9 +115,15 @@ public class AgentRunService {
         if (run == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "Agent 执行不存在");
         }
-        if (!"WAITING_APPROVAL".equals(run.getStatus())) {
-            throw new BusinessException(ErrorCode.BAD_REQUEST, "当前执行不在待审批状态");
+        // CAS 抢占审批：把 WAITING_APPROVAL 置为 EXECUTING，影响行数为 0 说明已被并发审批处理，避免重复执行工具
+        int claimed = runMapper.update(null, new LambdaUpdateWrapper<AgentRun>()
+                .eq(AgentRun::getId, runId)
+                .eq(AgentRun::getStatus, "WAITING_APPROVAL")
+                .set(AgentRun::getStatus, "EXECUTING"));
+        if (claimed == 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "该审批已被处理或执行状态已变化");
         }
+        run.setStatus("EXECUTING");
         ToolCallRecord pending = toolCallMapper.listByRunId(runId).stream()
                 .filter(call -> "WAITING_APPROVAL".equals(call.getStatus()))
                 .findFirst()
@@ -152,14 +158,15 @@ public class AgentRunService {
         }
 
         saveMessages(runId, messages);
-        return executeLoop(runId, messages, references, onEvent);
+        return executeLoop(runId, messages, references, run.getMaxIterations(), onEvent);
     }
 
     private AgentExecutionResult executeLoop(
-            Long runId, List<ChatMessage> messages, List<Reference> references, Consumer<AgentEvent> onEvent) {
+            Long runId, List<ChatMessage> messages, List<Reference> references,
+            int maxIterations, Consumer<AgentEvent> onEvent) {
         updateStatus(runId, "EXECUTING");
 
-        for (int iteration = 0; iteration < DEFAULT_MAX_ITERATIONS; iteration++) {
+        for (int iteration = 0; iteration < maxIterations; iteration++) {
             long startMs = System.currentTimeMillis();
             ChatCompletionResponse response;
             try {
