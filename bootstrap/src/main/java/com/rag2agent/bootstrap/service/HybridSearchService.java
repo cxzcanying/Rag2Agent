@@ -11,8 +11,14 @@ import com.rag2agent.rag.core.retrieval.RetrievalResult;
 import com.rag2agent.rag.core.retrieval.impl.QueryRouter;
 import com.rag2agent.rag.core.retrieval.impl.QueryRouter.Route;
 import com.rag2agent.rag.core.retrieval.impl.RrfFusion;
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -32,38 +38,102 @@ public class HybridSearchService {
     private final JdbcTemplate jdbc;
     private final EmbeddingClient embeddingClient;
     private final RerankClient rerankClient;
+    private final MeterRegistry meterRegistry;
+    private final ObservationRegistry observationRegistry;
 
     /**
      * 三个依赖的分工：
      * JdbcTemplate 负责两条检索 SQL；EmbeddingClient 把查询文本向量化；
      * RerankClient 对融合后的候选重新打分。
      */
-    public HybridSearchService(JdbcTemplate jdbc, EmbeddingClient embeddingClient, RerankClient rerankClient) {
+    public HybridSearchService(
+            JdbcTemplate jdbc,
+            EmbeddingClient embeddingClient,
+            RerankClient rerankClient,
+            MeterRegistry meterRegistry,
+            ObservationRegistry observationRegistry) {
         this.jdbc = jdbc;
         this.embeddingClient = embeddingClient;
         this.rerankClient = rerankClient;
+        this.meterRegistry = meterRegistry;
+        this.observationRegistry = observationRegistry;
     }
 
     public List<RetrievalResult> search(Long kbId, String query, int topK) {
+        return search(kbId, query, SearchOptions.defaults(topK));
+    }
+
+    public List<RetrievalResult> search(Long kbId, String query, SearchOptions options) {
+        return Observation.createNotStarted("rag2agent.search", observationRegistry)
+                .lowCardinalityKeyValue("strategy", metricStrategy(options))
+                .observe(() -> measuredSearch(kbId, query, options));
+    }
+
+    private List<RetrievalResult> measuredSearch(Long kbId, String query, SearchOptions options) {
+        Timer.Sample sample = Timer.start(meterRegistry);
+        String outcome = "success";
+        try {
+            List<RetrievalResult> results = doSearch(kbId, query, options);
+            DistributionSummary.builder("rag2agent.search.results")
+                    .description("每次检索返回的结果数")
+                    .tag("strategy", metricStrategy(options))
+                    .register(meterRegistry)
+                    .record(results.size());
+            return results;
+        } catch (RuntimeException e) {
+            outcome = "error";
+            throw e;
+        } finally {
+            sample.stop(Timer.builder("rag2agent.search.duration")
+                    .description("RAG 检索端到端耗时")
+                    .tag("strategy", metricStrategy(options))
+                    .tag("outcome", outcome)
+                    .publishPercentileHistogram()
+                    .register(meterRegistry));
+        }
+    }
+
+    private List<RetrievalResult> doSearch(Long kbId, String query, SearchOptions options) {
         // 规则路由：疑问句大部分情况是开放式问题走语义（只向量），短词/编号是专业术语走关键词（省一次 embedding），其余混合
-        Route route = QueryRouter.route(query);
+        Route route = resolveRoute(options.strategy(), query);
         // 向量路：只有 KEYWORD 路由才跳过（短词向量化容易语义漂移，直接走关键词更准）
         List<RetrievalResult> vectorResults = (route != Route.KEYWORD)
-                ? vectorSearch(kbId, embedQuery(query), topK)
+                ? vectorSearch(kbId, embedQuery(query), options.candidateTopK())
                 : List.of();
         // 关键词路：SEMANTIC 路由跳过（疑问句关键词召回意义不大，省一次 SQL）
         List<RetrievalResult> keywordResults = (route != Route.SEMANTIC)
-                ? keywordSearch(kbId, query, topK)
+                ? keywordSearch(kbId, query, options.candidateTopK())
                 : List.of();
 
         // RRF 融合两路结果，分数域统一、同名 chunk 去重累加
-        List<RetrievalResult> fused = RrfFusion.fuse(List.of(vectorResults, keywordResults), topK);
+        int fusedTopK = options.rerankEnabled() ? options.candidateTopK() : options.topK();
+        List<RetrievalResult> fused =
+                RrfFusion.fuse(List.of(vectorResults, keywordResults), fusedTopK, options.rrfK());
         // 两路都没有候选：直接返回空，避免拿空列表去调 rerank 白花钱
         if (fused.isEmpty()) {
             return List.of();
         }
+        if (!options.rerankEnabled()) {
+            return fused.stream().limit(options.topK()).toList();
+        }
         // 精排：用 cross-encoder 对融合后的候选重新打分，取 topK
-        return rerank(query, fused, topK);
+        return rerank(query, fused, options.topK()).stream()
+                .filter(result -> options.rerankMinScore() == null
+                        || result.score() >= options.rerankMinScore())
+                .toList();
+    }
+
+    private String metricStrategy(SearchOptions options) {
+        return options.strategy().name().toLowerCase(Locale.ROOT);
+    }
+
+    private Route resolveRoute(SearchOptions.Strategy strategy, String query) {
+        return switch (strategy) {
+            case AUTO -> QueryRouter.route(query);
+            case VECTOR -> Route.SEMANTIC;
+            case KEYWORD -> Route.KEYWORD;
+            case HYBRID -> Route.HYBRID;
+        };
     }
 
     /**

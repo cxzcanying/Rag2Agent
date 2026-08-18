@@ -1,6 +1,6 @@
 # RAG2Agent
 
-RAG2Agent 是一个面向企业级 RAG + Agent 场景的后端基础工程。当前阶段提供项目骨架、模块边界、基础配置和健康检查接口；知识库、检索、问答、Agent 工作流等业务功能按 [docs/tech-selection.md](docs/tech-selection.md) 第 7 节的分期计划逐步实现。
+RAG2Agent 是一个面向企业级 RAG + Agent 场景的后端基础工程。当前已完成第一期演示闭环，并进入 D13 评测与可观测阶段。
 
 ## 技术路线
 
@@ -54,10 +54,20 @@ npm run dev
 - 文档上传与 MinIO 存储
 - 知识库管理
 - RAG 检索（混合检索 + RRF + Rerank）
+- Agent 对话、function calling、工具审批与 SSE
+- 评测用例导入、Hit@k/MRR、可选 Faithfulness/Answer Correctness、配置矩阵
+- Actuator、Prometheus 指标、OpenTelemetry tracing bridge、JSON 日志
 
-尚未实现：
+评测接口：
 
-- Agent 工作流
-- MCP 工具调用
+- `POST /api/evaluations/cases/import` 导入 `question/expectedAnswer/goldenDocumentIds`
+- `POST /api/evaluations/runs` 运行单个检索配置
+- `POST /api/evaluations/matrix` 顺序运行多个配置并保存结果
+- `GET /api/evaluations/runs?kbId=...` 查看历史结果
 
-这些功能会在后续阶段基于当前模块边界逐步实现。
+可观测接口：
+
+- `GET /actuator/health`
+- `GET /actuator/prometheus`
+
+数据库已有数据卷需要手动执行 [003_evaluation.sql](docker/postgres/init/003_evaluation.sql)；新建 PostgreSQL 数据卷会自动执行。

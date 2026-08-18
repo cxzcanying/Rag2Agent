@@ -21,6 +21,11 @@ import com.rag2agent.infra.ai.model.ChatCompletionResponse;
 import com.rag2agent.infra.ai.model.ChatMessage;
 import com.rag2agent.infra.ai.model.ToolCall;
 import com.rag2agent.rag.core.retrieval.RetrievalResult;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -59,6 +64,8 @@ public class AgentRunService {
     private final ToolCallRecordMapper toolCallMapper;
     private final ObjectMapper objectMapper;
     private final StringRedisTemplate redis;
+    private final MeterRegistry meterRegistry;
+    private final ObservationRegistry observationRegistry;
 
     public AgentRunService(
             ChatModelClient chatClient,
@@ -68,7 +75,9 @@ public class AgentRunService {
             AgentStepMapper stepMapper,
             ToolCallRecordMapper toolCallMapper,
             ObjectMapper objectMapper,
-            StringRedisTemplate redis) {
+            StringRedisTemplate redis,
+            MeterRegistry meterRegistry,
+            ObservationRegistry observationRegistry) {
         this.chatClient = chatClient;
         this.searchService = searchService;
         this.toolRegistry = toolRegistry;
@@ -77,6 +86,8 @@ public class AgentRunService {
         this.toolCallMapper = toolCallMapper;
         this.objectMapper = objectMapper;
         this.redis = redis;
+        this.meterRegistry = meterRegistry;
+        this.observationRegistry = observationRegistry;
     }
 
     public AgentExecutionResult start(
@@ -170,14 +181,20 @@ public class AgentRunService {
             long startMs = System.currentTimeMillis();
             ChatCompletionResponse response;
             try {
-                response = chatClient.complete(new ChatCompletionRequest(
-                        "deepseek", null, messages, Map.of(), toolRegistry.toolDefs()));
+                response = Observation.createNotStarted("rag2agent.agent.llm", observationRegistry)
+                        .highCardinalityKeyValue("run.id", String.valueOf(runId))
+                        .observe(() -> chatClient.complete(new ChatCompletionRequest(
+                                "deepseek", null, messages, Map.of(), toolRegistry.toolDefs())));
             } catch (Exception e) {
+                recordLlmMetric(startMs, "error");
                 log.error("Agent LLM 调用失败: runId={}", runId, e);
                 updateStatus(runId, "FAILED");
+                recordAgentTransition("failed");
                 onEvent.accept(new AgentEvent("error", e.getMessage()));
                 return new AgentExecutionResult(runId, "FAILED", null, references, null);
             }
+            recordLlmMetric(startMs, "success");
+            recordTokens(response.usage());
             recordLlmStep(runId, iteration, response, System.currentTimeMillis() - startMs);
 
             if (response.toolCalls() != null && !response.toolCalls().isEmpty()) {
@@ -191,6 +208,7 @@ public class AgentRunService {
                         toolCallMapper.insert(pending);
 
                         updateStatus(runId, "WAITING_APPROVAL");
+                        recordAgentTransition("waiting_approval");
                         saveMessages(runId, messages);
                         onEvent.accept(new AgentEvent("approval_required", Map.of(
                                 "runId", runId,
@@ -215,12 +233,14 @@ public class AgentRunService {
             } else {
                 String answer = response.content() == null ? "" : response.content();
                 updateStatus(runId, "COMPLETED");
+                recordAgentTransition("completed");
                 onEvent.accept(new AgentEvent("done", Map.of("answer", answer, "references", references)));
                 return new AgentExecutionResult(runId, "COMPLETED", answer, references, null);
             }
         }
 
         updateStatus(runId, "FAILED");
+        recordAgentTransition("failed");
         String message = "达到最大迭代次数，仍未完成";
         onEvent.accept(new AgentEvent("error", message));
         return new AgentExecutionResult(runId, "FAILED", message, references, null);
@@ -253,7 +273,22 @@ public class AgentRunService {
         if (tool == null) {
             throw new IllegalStateException("未知工具: " + toolName);
         }
-        return tool.execute(arguments);
+        Timer.Sample sample = Timer.start(meterRegistry);
+        String outcome = "success";
+        try {
+            return Observation.createNotStarted("rag2agent.agent.tool", observationRegistry)
+                    .lowCardinalityKeyValue("tool", toolName)
+                    .observe(() -> tool.execute(arguments));
+        } catch (RuntimeException e) {
+            outcome = "error";
+            throw e;
+        } finally {
+            sample.stop(Timer.builder("rag2agent.agent.tool.duration")
+                    .tag("tool", toolName)
+                    .tag("outcome", outcome)
+                    .publishPercentileHistogram()
+                    .register(meterRegistry));
+        }
     }
 
     private Map<String, Object> parseArguments(String argumentsJson) {
@@ -330,5 +365,38 @@ public class AgentRunService {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("JSON 序列化失败", e);
         }
+    }
+
+    private void recordLlmMetric(long startedMs, String outcome) {
+        Timer.builder("rag2agent.ai.chat.duration")
+                .tag("outcome", outcome)
+                .publishPercentileHistogram()
+                .register(meterRegistry)
+                .record(Duration.ofMillis(System.currentTimeMillis() - startedMs));
+    }
+
+    private void recordTokens(Map<String, Object> usage) {
+        if (usage == null) {
+            return;
+        }
+        recordTokenType(usage, "prompt_tokens", "prompt");
+        recordTokenType(usage, "completion_tokens", "completion");
+    }
+
+    private void recordTokenType(Map<String, Object> usage, String key, String type) {
+        Object value = usage.get(key);
+        if (value instanceof Number number) {
+            Counter.builder("rag2agent.ai.tokens")
+                    .tag("type", type)
+                    .register(meterRegistry)
+                    .increment(number.doubleValue());
+        }
+    }
+
+    private void recordAgentTransition(String status) {
+        Counter.builder("rag2agent.agent.transitions")
+                .tag("status", status)
+                .register(meterRegistry)
+                .increment();
     }
 }

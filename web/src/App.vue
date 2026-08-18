@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import LoginView from './components/LoginView.vue'
 import KbView from './components/KbView.vue'
 import ChatView from './components/ChatView.vue'
+import EvaluationView from './components/EvaluationView.vue'
 import { auth } from './api'
 
 const loggedIn = ref(false)
@@ -44,6 +45,7 @@ onMounted(async () => {
         <nav>
           <button :class="{ active: currentTab === 'kb' }" @click="currentTab = 'kb'">知识库</button>
           <button :class="{ active: currentTab === 'chat' }" @click="currentTab = 'chat'">对话</button>
+          <button :class="{ active: currentTab === 'evaluation' }" @click="currentTab = 'evaluation'">评测</button>
         </nav>
         <div class="user-area">
           <span>{{ user?.nickname || user?.username }}</span>
@@ -52,7 +54,8 @@ onMounted(async () => {
       </header>
       <main class="main">
         <KbView v-if="currentTab === 'kb'" />
-        <ChatView v-else />
+        <ChatView v-else-if="currentTab === 'chat'" />
+        <EvaluationView v-else />
       </main>
     </template>
   </div>

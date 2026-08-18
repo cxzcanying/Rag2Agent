@@ -79,3 +79,19 @@ export const agent = {
   approve: (runId, approved) =>
     request('/agent/approvals/' + runId, { method: 'POST', body: JSON.stringify({ approved }) })
 }
+
+export const evaluations = {
+  importCases: (body) => request('/evaluations/cases/import', {
+    method: 'POST',
+    body: JSON.stringify(body)
+  }),
+  run: (body) => request('/evaluations/runs', {
+    method: 'POST',
+    body: JSON.stringify(body)
+  }),
+  matrix: (body) => request('/evaluations/matrix', {
+    method: 'POST',
+    body: JSON.stringify(body)
+  }),
+  listRuns: (kbId) => request('/evaluations/runs?kbId=' + kbId)
+}

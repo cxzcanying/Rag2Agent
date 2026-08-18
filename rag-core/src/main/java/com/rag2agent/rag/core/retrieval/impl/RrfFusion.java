@@ -14,7 +14,7 @@ import java.util.Map;
  */
 public final class RrfFusion {
 
-    private static final double K = 60.0;
+    private static final double DEFAULT_K = 60.0;
 
     private RrfFusion() {}
 
@@ -25,6 +25,17 @@ public final class RrfFusion {
      * 2) 按融合分降序排序，截取 topK，用融合分替换原始分数输出。
      */
     public static List<RetrievalResult> fuse(List<List<RetrievalResult>> rankedLists, int topK) {
+        return fuse(rankedLists, topK, DEFAULT_K);
+    }
+
+    /**
+     * 允许评测阶段扫描不同的 RRF k；线上默认入口仍固定使用论文推荐值 60。
+     */
+    public static List<RetrievalResult> fuse(
+            List<List<RetrievalResult>> rankedLists, int topK, double rrfK) {
+        if (rrfK < 0) {
+            throw new IllegalArgumentException("rrfK 不能小于 0");
+        }
         // resultById：chunkId -> 首次遇到的原始结果（含引用溯源 metadata）
         // rrfScore：chunkId -> 跨路累加的 RRF 分数
         Map<String, RetrievalResult> resultById = new LinkedHashMap<>();
@@ -36,7 +47,7 @@ public final class RrfFusion {
                 RetrievalResult result = rankedList.get(rank);
                 // 排名第 rank 的贡献：k=60 时第一名 1/61，第二名 1/62，差距被压平，
                 // 效果是"多路都出现"比"单路排第一"更重要
-                double contribution = 1.0 / (K + rank + 1);
+                double contribution = 1.0 / (rrfK + rank + 1);
                 // 同一 chunk 在多路出现时分数累加
                 rrfScore.merge(result.chunkId(), contribution, Double::sum);
                 // putIfAbsent：只保留第一次遇到的结果，避免重复覆盖（引用溯源信息不丢）

@@ -69,3 +69,40 @@
 - 覆盖各评测项场景：精确词（编号/API 名）、疑问句语义、关系型多跳（图检索项）；
 - 配置矩阵实验：切块 × 检索策略 × 重排开关，结果入库可回溯；
 - CI 跑核心评测子集做冒烟，防止改动劣化。
+
+## D13 运行方式
+
+1. 启动 PostgreSQL、Redis、MinIO 和 RocketMQ，登录应用并准备一个知识库。
+2. 对已有数据卷执行 `docker/postgres/init/003_evaluation.sql`，新建数据卷会自动执行。
+3. 调用 `POST /api/evaluations/cases/import` 导入用例：
+
+```json
+{
+  "kbId": 1,
+  "cases": [
+    {
+      "question": "如何申请年假？",
+      "expectedAnswer": "按制度提交年假申请。",
+      "goldenDocumentIds": [12]
+    }
+  ]
+}
+```
+
+4. 调用 `POST /api/evaluations/runs` 运行单个配置，或调用 `/api/evaluations/matrix` 批量比较 `strategy/topK/candidateTopK/rrfK/rerankEnabled`。
+5. 评测结果写入 `eval_run` 和 `eval_case_result`，页面“评测”页可查看历史聚合指标。生成与裁判默认关闭，开启 `evaluateGeneration` 才会消耗模型额度。
+
+## D13 本次执行结果（2026-08-18）
+
+- 执行状态：**8 条人工核验 smoke 用例、3 组配置均执行完成**。知识库 ID 为 `3`，金标文档为 Java 讲义 `7` 和 MySQL 讲义 `9`，`topK=5`、`candidateTopK=20`、`rrfK=60`，未启用生成质量评测。
+
+| Run ID | 策略 | Rerank | 命中数 | Hit@5 | MRR | 状态 |
+|---|---|---:|---:|---:|---:|---|
+| 2 | AUTO | 开 | 7/8 | 0.875 | 0.875 | COMPLETED |
+| 3 | KEYWORD | 关 | 1/8 | 0.125 | 0.125 | COMPLETED |
+| 4 | VECTOR | 开 | 8/8 | 1.000 | 1.000 | COMPLETED |
+
+- Faithfulness / Answer Correctness：本次 `evaluateGeneration=false`，未执行。
+- 主要结论：当前小样本中向量检索效果最好；中文 `pg_trgm` 关键词路只命中 1 条，明显是短板；AUTO 因“Java之父是谁？”未返回文档而少命中 1 条，需要继续检查短问句路由及关键词兜底。
+- 执行期间修复了 `eval_run` 创建时 PostgreSQL 返回多个 generated keys 导致矩阵启动失败的问题；修复后核心单测 **11/11** 通过，三组运行结果已写入 `eval_run` / `eval_case_result`。
+- 限制：这 8 条用例由现有两份文档构造，只能视为 smoke 基线，**不能替代计划要求的 50-100 条真实业务金标集**。

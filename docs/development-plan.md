@@ -55,3 +55,10 @@
 - D9-D10 依赖 D7-D8（数据能入库）；
 - D11-D12 依赖 D9-D10（检索链路可用）；
 - D13 评测依赖 D9-D10 的真实检索结果。
+
+## D13 当前落地状态
+
+- 已落地：评测用例导入、单配置运行、配置矩阵运行、Hit@k/MRR、可选 Faithfulness/Answer Correctness、逐题结果持久化。
+- 已落地：Actuator health/metrics/prometheus、Micrometer 业务指标、OpenTelemetry tracing bridge、Spring Boot JSON 日志。
+- 已落地：GitHub Actions 后端确定性单测/编译和前端构建冒烟。
+- 待补数据：真实知识库的 50-100 条金标用例；没有金标数据就不能把评测数字当成优化结论。

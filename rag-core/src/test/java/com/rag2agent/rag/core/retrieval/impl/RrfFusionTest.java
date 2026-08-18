@@ -40,4 +40,15 @@ class RrfFusionTest {
         assertTrue(fused.get(0).score() > fused.get(1).score());
         assertTrue(fused.get(1).score() > fused.get(2).score());
     }
+
+    @Test
+    void fuse_acceptsEvaluationK() {
+        List<List<RetrievalResult>> lists = List.of(List.of(r("a"), r("b")));
+
+        List<RetrievalResult> lowK = RrfFusion.fuse(lists, 2, 0);
+        List<RetrievalResult> highK = RrfFusion.fuse(lists, 2, 100);
+
+        assertTrue(lowK.get(0).score() - lowK.get(1).score()
+                > highK.get(0).score() - highK.get(1).score());
+    }
 }
