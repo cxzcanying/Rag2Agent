@@ -62,3 +62,23 @@
 - 已落地：Actuator health/metrics/prometheus、Micrometer 业务指标、OpenTelemetry tracing bridge、Spring Boot JSON 日志。
 - 已落地：GitHub Actions 后端确定性单测/编译和前端构建冒烟。
 - 待补数据：真实知识库的 50-100 条金标用例；没有金标数据就不能把评测数字当成优化结论。
+
+## 第二版七天计划：工程可用性与 Agent 可靠性
+
+> 目标：在现有 Agent + MCP 基础上，把“能演示”推进到“可排查、可限流、可恢复、可扩展”。不把 Nacos/Apollo、GraphRAG 等高风险扩展塞进同一周的核心验收。
+
+| 天 | 任务 | 主要交付 | 验收标准 |
+|---|---|---|---|
+| D1 | 评测可靠性收口 | 异步评测 run、状态/进度查询、幂等键、数据库对账；补评测异常测试 | 客户端断开不重复 run；超时/失败状态可查询；结果可从 `eval_run` 恢复 |
+| D2 | 上下文压缩与输入预算 | `ContextCompactor`、token budget、引用去重/截断、滚动摘要 fallback | 超长会话不触发模型上下文错误；记录压缩前后 token 和丢弃信息 |
+| D3 | 全链路追踪与日志 | Micrometer Observation 子 span、OTLP、Jaeger Compose、JSON trace 字段 | HTTP→检索→Rerank→LLM→Tool→MQ 可在 Jaeger 串联；日志可按 traceId 查询 |
+| D4 | 可靠性策略 | Resilience4j 重试/熔断/降级、API 限流、统一超时错误、输入防御 | 模型 429/5xx/超时有稳定 JSON；幂等请求不重复副作用；限流返回 429 |
+| D5 | 缓存与并行检索 | Caffeine L1 + Redis L2、查询 embedding/结果缓存、向量/关键词并行 | 命中率可观测；权限和版本不串缓存；两路并行延迟下降 |
+| D6 | 模型与工具扩展 | provider registry、MCP transport/远程工具适配、工具 schema/审计/超时 | 新增 OpenAI-compatible provider 只改配置；新增只读工具不改 Agent 循环 |
+| D7 | 集成验收与成本治理 | 公开评测回归、Token/成本/队列指标、故障演练、文档和 CI 更新 | 核心测试绿；Jaeger 有完整样例；限流、熔断、恢复、重试、压缩均有证据 |
+
+### V2 范围裁决
+
+- **本周必须做**：评测异步化、上下文预算、OTel/Jaeger 链路、结构化日志、限流/超时/重试/降级、幂等、Token 与缓存指标。
+- **本周做抽象但不强行上线**：Nacos/Apollo 动态配置、非兼容模型 adapter、远程 MCP transport；先保证接口边界和本地 fallback。
+- **暂不纳入七天核心验收**：GraphRAG、复杂提示注入分类模型、完整语义缓存平台、跨地域配置中心高可用。这些可在 V2.1 继续推进。

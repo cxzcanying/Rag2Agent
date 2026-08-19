@@ -28,6 +28,8 @@ logs/
 .npm-cache/
 eval-data/
 .eval-tools/
+__pycache__/
+*.py[cod]
 
 # OS
 .DS_Store

@@ -126,6 +126,26 @@
 
 结论：当前公开子集上 VECTOR 明显优于 `pg_trgm` 中文关键词路；AUTO 受规则路由影响，部分短问句未走向量路。该结果支持 TODO 中引入中文分词或独立搜索引擎的方向，但不应外推为完整 MIRACL 的最终结论。
 
+### MIRACL zh 参数与重排补充对比
+
+同一知识库 `kbId=4`、同一 100 条用例、`topK=5` 下补跑以下配置：
+
+| Run ID | 配置 | Rerank | candidateTopK | rrfK | Hit@5 | MRR | 状态 |
+|---|---|---:|---:|---:|---:|---:|---|
+| 9 | VECTOR | 关 | 20 | 60 | 1.000 | 0.950 | COMPLETED |
+| 10 | VECTOR | 开 | 20 | 20 | 1.000 | 0.950 | COMPLETED |
+| 11 | VECTOR | 开 | 20 | 100 | 1.000 | 0.955 | COMPLETED |
+| 12 | VECTOR | 开 | 50 | 60 | 1.000 | 0.955 | COMPLETED |
+| 13 | AUTO | 关 | 20 | 60 | 0.660 | 0.640 | COMPLETED |
+| 14 | KEYWORD | 开 | 20 | 60 | 0.010 | 0.010 | COMPLETED |
+
+补充结论：
+
+- VECTOR 在本子集上 Hit@5 稳定为 1.000；关闭 Rerank 只使 MRR 从 0.955 降到 0.950，Rerank 的收益主要体现在排序而非召回。
+- `rrfK=20` 没有优于基线 `rrfK=60`，`rrfK=100` 与扩大 `candidateTopK=50` 的结果相同；当前没有证据支持调整默认值。
+- AUTO 的瓶颈仍是规则路由，关闭 Rerank 后 Hit@5 不变、MRR 略升；KEYWORD 开启 Rerank 也没有改善中文召回，说明问题在召回而非精排。
+- 当前评测接口没有暴露切块参数，且已入库文档不能在同一知识库中安全切换 chunk 配置；`chunkSize/overlap`、PDF 文本规范化、HyDE 和中文分词 A/B 仍未完成，不能宣称 D13 覆盖了全部候选优化。
+
 ### DuReader Robust 生成质量
 
 知识库 `kbId=5`，Run ID=`8`，30/30 条结果持久化，0 errors，状态 `COMPLETED`。

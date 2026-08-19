@@ -73,3 +73,83 @@
 - [ ] **只读工具调用未落库审计**（AgentRunService.executeLoop）
   - 问题：非审批工具（search_knowledge_base）执行时只推送 tool_start 事件，未写 tool_call 表，工具调用轨迹不完整。
   - 方案：所有工具调用统一落库（status SUCCEEDED/FAILED），审批工具沿用 WAITING_APPROVAL 流程。
+
+## V2 需求审查：Agent 工程可用性
+
+> 审查时间：2026-08-19。以下状态以当前代码为准；`tech-selection.md` 中已有架构方向不等于已经实现。
+
+### P0 上下文与评测可靠性
+
+- [ ] **模型上下文压缩与预算控制**
+  - 当前：Agent 直接把系统提示、用户问题、检索引用和工具历史拼入消息；没有统一 token 预算、压缩策略或超长输入保护。`tokenCount` 仍是字符数近似。
+  - 可行性：高。优先做确定性预算控制，再接可选 LLM 摘要，避免每次请求都增加一次模型调用。
+  - 方案：新增 `ContextCompactor` 抽象；按“系统提示/最近消息/工具结果/高相关引用”分层保留，超预算时先去重和截断，仍超限再生成滚动摘要；摘要失败回退到确定性截断。预算按模型配置，并预留输出 token。
+  - 验收：超长会话不触发 provider 400；压缩前后保留关键引用；记录压缩前后 token、丢弃块数和额外成本。
+
+- [ ] **评测任务可靠性与结果对账**
+  - 当前：生成评测同步接口会超过客户端读取超时；脚本 `run-state.json` 可能与数据库 `eval_run` 脱节；切块参数矩阵尚未真正可执行。
+  - 方案：评测提交改为异步任务，立即返回 `runId`；增加状态/进度查询和幂等键；恢复时以 `eval_run` / `eval_case_result` 为事实源；补齐失败、取消、超时状态。切块参数通过“独立知识库/独立索引版本”运行，不能在同一库原地覆盖。
+  - 验收：客户端断开不重复创建运行；同一幂等键只产生一个 run；重启后可恢复；每个 run 可查询逐题结果和错误原因。
+
+### P0 可观测性
+
+- [ ] **RAG 全链路追踪与结构化日志**（部分已有）
+  - 当前：已有 Micrometer、OTel tracing bridge、JSON 日志和检索/Agent 局部 Observation；尚未证明 route → retrieve → rerank → LLM → tool → RocketMQ 的 span 能在 Jaeger 中完整串起来，也没有统一关键字段规范。
+  - 方案：采用成熟组合 Micrometer Observation + OpenTelemetry OTLP + Jaeger；为 route、embedding、vector、keyword、RRF、rerank、LLM、tool、MQ consumer 建子 span。JSON 日志统一输出 `traceId/spanId/runId/kbId/userId/provider/model/latencyMs/candidateCount/resultCount/outcome`，严禁输出 prompt、密钥和完整文档内容。
+  - 验收：一次 Agent 请求在 Jaeger 中可展开完整链路；任意失败日志可用 `traceId` 反查 span 和数据库 run/step。
+
+- [ ] **业务指标补全**（部分已有）
+  - 当前：已有检索耗时、结果数、LLM 耗时、Token、Agent transition 指标；没有缓存命中率、provider 限流/重试/熔断、上下文压缩、队列积压等指标。
+  - 方案：Micrometer 统一命名和低基数标签，补充 `cache.hit/miss`、`search.phase.duration`、`ai.request/retry/limit`、`context.tokens`、`mq.lag`；Prometheus 采集，Grafana/Jaeger 作为展示面。
+  - 验收：能按 provider、模型、路由、结果状态查看 QPS、P50/P95/P99、错误率、Token 和缓存命中率。
+
+### P1 可靠性与安全边界
+
+- [ ] **API 限流、超时、重试、熔断和降级**
+  - 当前：OkHttp 有连接/读写超时，但没有统一 Resilience4j 策略；没有用户级 API 限流，模型失败时没有稳定的错误分类和降级协议。
+  - 方案：外部模型调用接 Resilience4j：连接错误/429/5xx 仅对幂等请求指数退避重试，写操作和工具副作用禁止盲目重试；连续失败触发熔断；检索降级为向量或关键词单路，生成降级为“仅返回引用/暂时无法生成”。统一 `ApiResponse` 错误码和 `Retry-After`。
+  - 验收：429、超时、熔断、恢复各有集成测试；客户端收到稳定 JSON，不出现 HTML 或空响应。
+
+- [ ] **输入防御与成本配额**
+  - 当前：有基础 DTO 校验，但没有统一最大字符/token、恶意提示注入防护、单用户 Token 配额和并发限制。
+  - 方案：入口做 Unicode/长度/控制字符规范化；按用户和知识库限制请求长度、检索 topK、Agent 最大步数和每日 Token；系统提示与外部文档分层，工具参数做 schema/权限校验；提示注入检测只作为风险信号，不替代权限控制。超限返回 400/413/429。
+  - 验收：超长输入、控制字符、提示注入样例和高频请求均优雅拒绝或降级，不泄露系统提示和密钥。
+
+- [ ] **端到端幂等性**
+  - 当前：入库任务有部分重试幂等，但同名上传、创建知识库和 Agent 请求仍可能因网络重试产生重复业务对象；相关竞态已在本清单前文列出。
+  - 方案：API 接受 `Idempotency-Key`；数据库对 `owner + key`、`kb_id + checksum` 建唯一约束；上传按文件 hash 决定复用或新版本；Agent 请求按 `userId + sessionId + clientRequestId` 去重。
+  - 验收：同一请求重放只返回第一次结果；并发重放不重复上传、入库、扣费或执行工具副作用。
+
+### P1 可插拔与动态配置
+
+- [ ] **模型热插拔与模型配置解耦**（部分已有）
+  - 当前：`infra-ai` 已有 Chat/Embedding/Rerank 接口，模型名通过配置注入；但 `InfraAiAutoConfiguration` 仍按 `deepseek`/`siliconflow` 名称硬选择，新增非兼容 provider 需要改装配代码，且变更需要重启。
+  - 方案：按 capability 建 provider registry，provider adapter 只实现统一接口；OpenAI-compatible provider 仅新增配置，非兼容协议新增 adapter；配置包含 active provider、model、timeout、限流策略和版本。短期支持重启生效，动态刷新作为配置中心能力单独验收。
+  - 验收：新增一个 OpenAI-compatible provider 只改配置；新增非兼容 provider 只新增 adapter，不改检索/Agent 核心流程。
+
+- [ ] **MCP 工具/知识源扩展边界**（部分已有）
+  - 当前：bootstrap 有 `ToolRegistry` 和工具实现；`mcp-server` 目前只有占位 `McpToolRegistry` 接口，尚未真正完成 MCP transport、远程工具发现和超时隔离。
+  - 方案：统一 `ToolDescriptor + ToolExecutor`，MCP 远程工具适配为同一执行接口；工具注册、参数 schema、权限、超时、审计和审批由核心编排层负责，具体工具只实现执行逻辑。
+  - 验收：新增只读工具不改 Agent 循环；高风险工具自动进入审批；远程 MCP 超时不会拖垮主请求。
+
+- [ ] **核心策略动态配置**
+  - 当前：chunk size、topK、RRF、Rerank 模型等主要来自静态配置或请求参数，没有配置中心和版本化发布。
+  - 方案：先抽象 `RuntimeConfigProvider`，本地 YAML 作为 fallback；生产接入 Nacos/Apollo 时通过版本号、灰度、回滚和 `@RefreshScope`/监听器刷新。切块参数变更必须创建新索引版本，不能在线修改旧 chunk。
+  - 可行性：中等。Nacos/Apollo 接入本身可行，但会增加部署和兼容成本；V2 先完成抽象、热刷新边界和回滚，再决定是否把配置中心纳入 Docker Compose。
+
+### P1 缓存、并发与成本
+
+- [ ] **多级缓存**
+  - 当前：Redis 只用于 Agent 审批上下文；没有 Caffeine L1、语义缓存、Embedding 查询缓存，也没有命中率指标。
+  - 方案：Caffeine L1 + Redis L2；缓存 key 至少包含 provider、model、版本、规范化文本和维度；优先缓存查询 embedding、热门检索结果和只读工具结果，写入/版本切换主动失效；不缓存带权限差异的裸文档结果。
+  - 验收：命中/未命中可观测，权限和文档版本不会串缓存。
+
+- [ ] **检索并行化**
+  - 当前：向量召回与关键词召回在 `HybridSearchService` 中顺序执行，Rerank 依赖融合结果必须串行。
+  - 方案：使用受控 `CompletableFuture`/虚拟线程执行向量和关键词召回并行，统一超时和取消；RRF 后再串行 Rerank；禁止使用无界 common pool。
+  - 验收：两路并行时端到端延迟接近较慢一路而非两路相加；任一路超时可按策略降级。
+
+- [ ] **长文本截断、摘要与 Token 成本控制**
+  - 当前：Agent 上下文没有统一 token budget；已有 Token 计数指标但没有预算拒绝、摘要、缓存抵扣或用户配额。
+  - 方案：与上下文压缩共用预算器；限制单次输入/引用/输出，超过阈值先压缩；按 user/provider/model 记录 prompt/completion/cache token 和估算成本；加入每日额度、并发信号量和异常流量告警。
+  - 验收：长文本不触发 provider 上限；恶意刷接口在达到配额后返回稳定 429；成本可按用户和模型追踪。
