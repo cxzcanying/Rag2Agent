@@ -26,6 +26,8 @@ logs/
 .docker-temp/
 .m2/
 .npm-cache/
+eval-data/
+.eval-tools/
 
 # OS
 .DS_Store

@@ -106,3 +106,43 @@
 - 主要结论：当前小样本中向量检索效果最好；中文 `pg_trgm` 关键词路只命中 1 条，明显是短板；AUTO 因“Java之父是谁？”未返回文档而少命中 1 条，需要继续检查短问句路由及关键词兜底。
 - 执行期间修复了 `eval_run` 创建时 PostgreSQL 返回多个 generated keys 导致矩阵启动失败的问题；修复后核心单测 **11/11** 通过，三组运行结果已写入 `eval_run` / `eval_case_result`。
 - 限制：这 8 条用例由现有两份文档构造，只能视为 smoke 基线，**不能替代计划要求的 50-100 条真实业务金标集**。
+
+## D13 公开数据集评测结果（2026-08-19）
+
+本轮使用公开、可复现的数据集补充 V1 评测，检索与生成质量分开统计：
+
+- **MIRACL zh dev**：Apache-2.0。dataset revision=`5be20db9509754dadad47689368639fcec739c00`，corpus revision=`d921ec7e349ce0d28daf30b2da9da5ee698bef0d`；本地下载中文 corpus 第 0 分片，SHA256=`b036ba6a927a4598b314cae55a1de200d2a619b28b4327f49e97ec4233d324827`。构造 100 条检索用例、339 篇文档，仅用于 Hit@5/MRR，不代表完整 MIRACL 中文语料。
+- **PaddlePaddle/dureader_robust**：Apache-2.0。revision=`10003b9e4d5e0afaff73fcf366f02d49880ec17a`，原始包 SHA256=`99bed9ced8995df1c89b9789f890c27a13b4650a56b4d973907cc28da8bd9f0f`。构造 30 条带参考答案用例、60 篇文档，用于生成质量评测。
+
+### MIRACL zh 检索配置对比
+
+知识库 `kbId=4`，`topK=5`、`candidateTopK=20`、`rrfK=60`。
+
+| Run ID | 策略 | Rerank | 用例数 | Hit@5 | MRR | 状态 |
+|---|---|---:|---:|---:|---:|---|
+| 5 | VECTOR | 开 | 100 | 1.000 | 0.955 | COMPLETED |
+| 6 | KEYWORD | 关 | 100 | 0.010 | 0.010 | COMPLETED |
+| 7 | AUTO | 开 | 100 | 0.660 | 0.630 | COMPLETED |
+
+结论：当前公开子集上 VECTOR 明显优于 `pg_trgm` 中文关键词路；AUTO 受规则路由影响，部分短问句未走向量路。该结果支持 TODO 中引入中文分词或独立搜索引擎的方向，但不应外推为完整 MIRACL 的最终结论。
+
+### DuReader Robust 生成质量
+
+知识库 `kbId=5`，Run ID=`8`，30/30 条结果持久化，0 errors，状态 `COMPLETED`。
+
+| 指标 | 结果 |
+|---|---:|
+| Hit@5 | 1.000 |
+| MRR | 1.000 |
+| Faithfulness | 0.930 |
+| Answer Correctness | 0.8433 |
+
+说明：每题包含一次回答模型调用和一次裁判模型调用，生成评测耗时超过客户端默认 120 秒；客户端曾出现 `requests.ReadTimeout`，但后端任务未中断并最终完成，详见翻车文档 D13 条目。后续应改为异步任务或提供按 `runId` 查询状态的接口。
+
+### 可复现入口
+
+- `scripts/evaluation/prepare_miracl_zh.py`：下载固定 revision 并生成 MIRACL 中文 PDF/用例。
+- `scripts/evaluation/prepare_dureader_robust.py`：下载固定 revision 并生成 DuReader PDF/用例。
+- `scripts/evaluation/run_miracl_eval.py`：批量上传、断点续跑、触发并汇总评测运行。
+
+原始数据、生成 PDF、运行状态和凭证均位于 `eval-data/`，已加入 `.gitignore`，不进入 Git 提交。
