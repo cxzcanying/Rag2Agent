@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.entity.AgentRun;
 import com.rag2agent.bootstrap.entity.AgentStep;
 import com.rag2agent.bootstrap.entity.ToolCallRecord;
+import com.rag2agent.bootstrap.config.AgentProperties;
 import com.rag2agent.bootstrap.mapper.AgentRunMapper;
 import com.rag2agent.bootstrap.mapper.AgentStepMapper;
 import com.rag2agent.bootstrap.mapper.ToolCallRecordMapper;
@@ -22,6 +23,7 @@ import com.rag2agent.infra.ai.model.ChatMessage;
 import com.rag2agent.infra.ai.model.ToolCall;
 import com.rag2agent.rag.core.retrieval.RetrievalResult;
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.observation.Observation;
@@ -66,6 +68,8 @@ public class AgentRunService {
     private final StringRedisTemplate redis;
     private final MeterRegistry meterRegistry;
     private final ObservationRegistry observationRegistry;
+    private final AgentProperties agentProperties;
+    private final ContextCompactor contextCompactor;
 
     public AgentRunService(
             ChatModelClient chatClient,
@@ -77,7 +81,8 @@ public class AgentRunService {
             ObjectMapper objectMapper,
             StringRedisTemplate redis,
             MeterRegistry meterRegistry,
-            ObservationRegistry observationRegistry) {
+            ObservationRegistry observationRegistry,
+            AgentProperties agentProperties) {
         this.chatClient = chatClient;
         this.searchService = searchService;
         this.toolRegistry = toolRegistry;
@@ -88,10 +93,17 @@ public class AgentRunService {
         this.redis = redis;
         this.meterRegistry = meterRegistry;
         this.observationRegistry = observationRegistry;
+        this.agentProperties = agentProperties;
+        this.contextCompactor = new ContextCompactor(agentProperties.getSummaryMaxChars());
     }
 
     public AgentExecutionResult start(
             Long userId, String sessionId, String query, Long kbId, Consumer<AgentEvent> onEvent) {
+        if (query.length() > agentProperties.getMaxInputChars()) {
+            throw new BusinessException(
+                    ErrorCode.BAD_REQUEST,
+                    "输入过长，最多允许 " + agentProperties.getMaxInputChars() + " 个字符");
+        }
         AgentRun run = new AgentRun();
         run.setSessionId(sessionId);
         run.setUserId(userId);
@@ -178,13 +190,36 @@ public class AgentRunService {
         updateStatus(runId, "EXECUTING");
 
         for (int iteration = 0; iteration < maxIterations; iteration++) {
+            int estimatedTokens = contextCompactor.estimateTokens(messages);
+            if (estimatedTokens > agentProperties.getContextTokenBudget()) {
+                onEvent.accept(new AgentEvent("context_compaction", Map.of(
+                        "status", "started",
+                        "estimatedTokens", estimatedTokens,
+                        "budget", agentProperties.getContextTokenBudget())));
+            }
+            ContextCompactor.CompactionResult compaction = contextCompactor.compact(
+                    messages, agentProperties.getContextTokenBudget());
+            if (compaction.compacted()) {
+                messages = new ArrayList<>(compaction.messages());
+                saveMessages(runId, messages);
+                recordCompaction(runId, iteration, compaction);
+                onEvent.accept(new AgentEvent("context_compaction", Map.of(
+                        "status", "completed",
+                        "estimatedTokensBefore", compaction.estimatedTokensBefore(),
+                        "estimatedTokensAfter", compaction.estimatedTokensAfter(),
+                        "droppedMessages", compaction.droppedMessages(),
+                        "budget", agentProperties.getContextTokenBudget())));
+            }
             long startMs = System.currentTimeMillis();
+            List<ChatMessage> requestMessages = messages;
             ChatCompletionResponse response;
             try {
                 response = Observation.createNotStarted("rag2agent.agent.llm", observationRegistry)
                         .highCardinalityKeyValue("run.id", String.valueOf(runId))
                         .observe(() -> chatClient.complete(new ChatCompletionRequest(
-                                "deepseek", null, messages, Map.of(), toolRegistry.toolDefs())));
+                                "deepseek", null, requestMessages,
+                                Map.of("max_tokens", agentProperties.getMaxOutputTokens()),
+                                toolRegistry.toolDefs())));
             } catch (Exception e) {
                 recordLlmMetric(startMs, "error");
                 log.error("Agent LLM 调用失败: runId={}", runId, e);
@@ -381,6 +416,28 @@ public class AgentRunService {
         }
         recordTokenType(usage, "prompt_tokens", "prompt");
         recordTokenType(usage, "completion_tokens", "completion");
+    }
+
+    private void recordCompaction(Long runId, int iteration, ContextCompactor.CompactionResult result) {
+        Counter.builder("rag2agent.agent.context.compactions")
+                .register(meterRegistry)
+                .increment();
+        DistributionSummary.builder("rag2agent.agent.context.tokens.before")
+                .register(meterRegistry)
+                .record(result.estimatedTokensBefore());
+        DistributionSummary.builder("rag2agent.agent.context.tokens.after")
+                .register(meterRegistry)
+                .record(result.estimatedTokensAfter());
+        AgentStep step = new AgentStep();
+        step.setRunId(runId);
+        step.setSeq(1000 + iteration);
+        step.setStepType("CONTEXT_COMPACTION");
+        step.setStatus("SUCCEEDED");
+        step.setOutput(toJson(Map.of(
+                "estimatedTokensBefore", result.estimatedTokensBefore(),
+                "estimatedTokensAfter", result.estimatedTokensAfter(),
+                "droppedMessages", result.droppedMessages())));
+        stepMapper.insert(step);
     }
 
     private void recordTokenType(Map<String, Object> usage, String key, String type) {

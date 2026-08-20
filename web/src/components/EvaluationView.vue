@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { evaluations, knowledgeBases } from '../api'
 
@@ -16,6 +16,7 @@ const caseJson = ref('[{"question":"示例问题","expectedAnswer":"","goldenDoc
 const runs = ref([])
 const running = ref(false)
 const importing = ref(false)
+let pollTimer
 
 async function loadKbs() {
   try {
@@ -51,7 +52,7 @@ async function runEvaluation() {
   if (!kbId.value) return ElMessage.warning('请选择知识库')
   running.value = true
   try {
-    await evaluations.run({
+    const submission = await evaluations.run({
       kbId: Number(kbId.value),
       name: runName.value,
       config: {
@@ -62,8 +63,8 @@ async function runEvaluation() {
         rerankEnabled: rerankEnabled.value,
         evaluateGeneration: evaluateGeneration.value
       }
-    })
-    ElMessage.success('评测完成')
+    }, crypto.randomUUID())
+    ElMessage.success('评测已提交，运行 ID：' + submission.runId)
     await loadRuns()
   } catch (e) {
     ElMessage.error(e.message)
@@ -77,7 +78,13 @@ function formatMetric(value) {
 }
 
 watch(kbId, loadRuns)
-onMounted(loadKbs)
+onMounted(() => {
+  loadKbs()
+  pollTimer = window.setInterval(() => {
+    if (runs.value.some((run) => run.status === 'QUEUED' || run.status === 'RUNNING')) loadRuns()
+  }, 3000)
+})
+onUnmounted(() => window.clearInterval(pollTimer))
 </script>
 
 <template>
@@ -133,7 +140,9 @@ onMounted(loadKbs)
       <el-table :data="runs" empty-text="暂无运行记录">
         <el-table-column prop="name" label="名称" min-width="150" />
         <el-table-column prop="status" label="状态" width="170" />
-        <el-table-column prop="totalCases" label="用例" width="80" />
+        <el-table-column label="进度" width="100">
+          <template #default="{ row }">{{ row.completedCases }}/{{ row.totalCases }}</template>
+        </el-table-column>
         <el-table-column label="Hit@k" width="100">
           <template #default="{ row }">{{ formatMetric(row.hitAtK) }}</template>
         </el-table-column>

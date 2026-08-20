@@ -33,6 +33,23 @@ def request_json(session: requests.Session, method: str, path: str, **kwargs):
     return payload.get("data")
 
 
+def wait_run(session: requests.Session, run_id: int) -> dict:
+    deadline = time.time() + 3600
+    while True:
+        status = request_json(session, "GET", f"/api/evaluations/runs/{run_id}")
+        print(json.dumps({
+            "runId": run_id,
+            "status": status["status"],
+            "completedCases": status["completedCases"],
+            "totalCases": status["totalCases"],
+        }, ensure_ascii=False))
+        if status["status"] in {"COMPLETED", "COMPLETED_WITH_ERRORS", "FAILED"}:
+            return status
+        if time.time() > deadline:
+            raise TimeoutError(f"等待评测运行 {run_id} 超时")
+        time.sleep(5)
+
+
 def login_or_register(session: requests.Session) -> str:
     credentials_path = PREPARED / "credentials.json"
     credentials = json.loads(credentials_path.read_text(encoding="utf-8")) if credentials_path.exists() else None
@@ -167,12 +184,15 @@ def main() -> None:
             ]
         )
         for index, config in enumerate(configs, start=1):
+            idempotency_key = f"{RUN_PREFIX}-{index}-{kb_id}"
             report = request_json(
                 session,
                 "POST",
                 "/api/evaluations/runs",
                 json={"kbId": kb_id, "name": f"{RUN_PREFIX}-{index}", "config": config},
+                headers={"Idempotency-Key": idempotency_key},
             )
+            report = wait_run(session, report["runId"])
             state["runs"].append(report)
             save_state(state)
             print(json.dumps({"runId": report["runId"], "status": report["status"], "hitAtK": report["hitAtK"], "mrr": report["mrr"]}, ensure_ascii=False))

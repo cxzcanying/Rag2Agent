@@ -43,7 +43,7 @@ async function send() {
   const q = question.value.trim()
   question.value = ''
   messages.value.push({ role: 'user', content: q })
-  messages.value.push({ role: 'assistant', content: '', references: [] })
+  messages.value.push({ role: 'assistant', content: '', references: [], contextCompression: null })
   // 关键：push 后从响应式数组取回的是 reactive 代理，后续 handleEvent 修改它才会触发渲染与持久化；
   // 如果在 push 前持有原始对象引用，修改会绕过 Vue 响应式，导致答案不刷新、localStorage 存旧值。
   const assistant = messages.value[messages.value.length - 1]
@@ -65,6 +65,10 @@ async function send() {
 
 function handleEvent(msg, event) {
   switch (event.type) {
+    case 'context_compaction':
+      msg.contextCompression = event.data || null
+      processStage.value = event.data?.status === 'started' ? '上下文压缩中...' : '上下文已压缩，正在继续处理...'
+      break
     case 'reference':
       msg.references = event.data || []
       processStage.value =
@@ -118,6 +122,22 @@ async function approve(approved) {
     <div class="messages">
       <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
         <div class="bubble">{{ m.content }}</div>
+
+        <div
+          v-if="m.contextCompression"
+          class="context-compression"
+          :class="m.contextCompression.status === 'completed' ? 'completed' : 'compacting'"
+        >
+          <span class="context-dot"></span>
+          <span v-if="m.contextCompression.status === 'started'">上下文压缩中...</span>
+          <span v-else>
+            上下文已压缩
+            <small>
+              {{ m.contextCompression.estimatedTokensBefore }} →
+              {{ m.contextCompression.estimatedTokensAfter }} tokens
+            </small>
+          </span>
+        </div>
 
         <div v-if="m.references && m.references.length" class="references">
           <div class="ref-title">引用来源</div>
@@ -191,6 +211,42 @@ async function approve(approved) {
   text-align: left;
   white-space: pre-wrap;
 }
+.context-compression {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  color: #606266;
+  background: #f5f7fa;
+  font-size: 12px;
+  text-align: left;
+}
+.context-compression.compacting {
+  color: #409eff;
+  border-color: #b3d8ff;
+  background: #ecf5ff;
+}
+.context-compression.completed {
+  color: #67c23a;
+  border-color: #c2e7b0;
+  background: #f0f9eb;
+}
+.context-compression small {
+  color: #909399;
+  margin-left: 3px;
+}
+.context-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.compacting .context-dot {
+  animation: pulse 0.9s ease-in-out infinite alternate;
+}
 .msg.user .bubble {
   background: #d9ecff;
 }
@@ -256,6 +312,10 @@ async function approve(approved) {
   to {
     transform: rotate(360deg);
   }
+}
+@keyframes pulse {
+  from { opacity: 0.35; }
+  to { opacity: 1; }
 }
 .input-row {
   display: flex;

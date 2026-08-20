@@ -30,6 +30,15 @@ CREATE TABLE IF NOT EXISTS eval_case_result (
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 异步提交使用请求幂等键防止客户端超时重试重复消耗模型额度。
+ALTER TABLE eval_run ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128);
+ALTER TABLE eval_run ADD COLUMN IF NOT EXISTS request_fingerprint VARCHAR(64);
+ALTER TABLE eval_run ADD COLUMN IF NOT EXISTS case_ids BIGINT[] NOT NULL DEFAULT '{}';
+
 CREATE INDEX IF NOT EXISTS idx_eval_case_kb_id ON eval_case(kb_id);
 CREATE INDEX IF NOT EXISTS idx_eval_run_kb_id ON eval_run(kb_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_eval_case_result_run_id ON eval_case_result(run_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_eval_run_idempotency
+    ON eval_run(kb_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_eval_case_result_run_case
+    ON eval_case_result(run_id, case_id);

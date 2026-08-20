@@ -5,7 +5,7 @@ function getToken() {
 }
 
 async function request(path, options = {}) {
-  const headers = {}
+  const headers = { ...(options.headers || {}) }
   const t = getToken()
   if (t) headers.satoken = t
   if (!(options.body instanceof FormData)) {
@@ -85,13 +85,16 @@ export const evaluations = {
     method: 'POST',
     body: JSON.stringify(body)
   }),
-  run: (body) => request('/evaluations/runs', {
+  run: (body, idempotencyKey) => request('/evaluations/runs', {
     method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
     body: JSON.stringify(body)
   }),
-  matrix: (body) => request('/evaluations/matrix', {
+  matrix: (body, idempotencyKey) => request('/evaluations/matrix', {
     method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
     body: JSON.stringify(body)
   }),
-  listRuns: (kbId) => request('/evaluations/runs?kbId=' + kbId)
+  listRuns: (kbId) => request('/evaluations/runs?kbId=' + kbId),
+  getRun: (runId) => request('/evaluations/runs/' + runId)
 }

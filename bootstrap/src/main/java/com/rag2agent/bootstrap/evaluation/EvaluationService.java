@@ -5,7 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.CaseInput;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.CaseResult;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.EvaluationConfig;
-import com.rag2agent.bootstrap.dto.EvaluationDtos.RunReport;
+import com.rag2agent.bootstrap.dto.EvaluationDtos.RunStatus;
+import com.rag2agent.bootstrap.dto.EvaluationDtos.RunSubmission;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunSummary;
 import com.rag2agent.bootstrap.service.SearchOptions;
 import com.rag2agent.bootstrap.service.HybridSearchService;
@@ -21,11 +22,15 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.time.Duration;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Executor;
+import jakarta.annotation.PostConstruct;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,18 +53,21 @@ public class EvaluationService {
     private final ChatModelClient chatClient;
     private final ObjectMapper objectMapper;
     private final MeterRegistry meterRegistry;
+    private final Executor evaluationTaskExecutor;
 
     public EvaluationService(
             EvaluationRepository repository,
             HybridSearchService searchService,
             ChatModelClient chatClient,
             ObjectMapper objectMapper,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            @org.springframework.beans.factory.annotation.Qualifier("evaluationTaskExecutor") Executor evaluationTaskExecutor) {
         this.repository = repository;
         this.searchService = searchService;
         this.chatClient = chatClient;
         this.objectMapper = objectMapper;
         this.meterRegistry = meterRegistry;
+        this.evaluationTaskExecutor = evaluationTaskExecutor;
     }
 
     @Transactional
@@ -67,23 +75,66 @@ public class EvaluationService {
         return repository.insertCases(kbId, cases);
     }
 
-    public RunReport run(Long kbId, String name, EvaluationConfig config) {
+    @PostConstruct
+    void resumeQueuedRuns() {
+        repository.requeueInterruptedRuns();
+        repository.listQueuedRunIds().forEach(runId -> evaluationTaskExecutor.execute(() -> executeRun(runId)));
+    }
+
+    public RunSubmission submit(Long kbId, String name, EvaluationConfig config, String idempotencyKey) {
         EvaluationConfig effectiveConfig = config.normalized();
         List<EvaluationRepository.EvalCase> cases = repository.listCases(kbId);
         if (cases.isEmpty()) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "该知识库没有评测用例，请先导入 cases");
         }
-        long runId = repository.createRun(kbId, name, toJson(effectiveConfig));
+        String normalizedKey = normalizeIdempotencyKey(idempotencyKey);
+        String fingerprint = fingerprint(kbId, name, effectiveConfig, cases);
+        EvaluationRepository.CreatedRun created = repository.createRun(
+                kbId,
+                name,
+                toJson(effectiveConfig),
+                cases.stream().map(EvaluationRepository.EvalCase::id).toList(),
+                normalizedKey,
+                fingerprint);
+        if (!fingerprint.equals(created.requestFingerprint())) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "Idempotency-Key 已用于不同的评测请求");
+        }
+        if (created.created()) {
+            evaluationTaskExecutor.execute(() -> executeRun(created.runId()));
+        }
+        EvaluationRepository.EvalRun run = repository.findRun(created.runId()).orElseThrow();
+        return new RunSubmission(
+                created.runId(), run.status(), run.totalCases(), run.completedCases(), !created.created());
+    }
+
+    public List<RunSubmission> submitMatrix(
+            Long kbId, String namePrefix, List<EvaluationConfig> configs, String idempotencyKey) {
+        List<RunSubmission> submissions = new ArrayList<>();
+        for (int i = 0; i < configs.size(); i++) {
+            String key = idempotencyKey == null ? null : idempotencyKey + "-" + (i + 1);
+            submissions.add(submit(kbId, namePrefix + "-" + (i + 1), configs.get(i), key));
+        }
+        return submissions;
+    }
+
+    private void executeRun(long runId) {
+        if (!repository.markRunning(runId)) {
+            return;
+        }
         Timer.Sample runTimer = Timer.start(meterRegistry);
-        List<CaseResult> results = new ArrayList<>();
-        List<Integer> firstRanks = new ArrayList<>();
         try {
-            for (EvaluationRepository.EvalCase evalCase : cases) {
-                CaseResult result = evaluateCase(evalCase, effectiveConfig);
-                results.add(result);
-                firstRanks.add(result.firstRelevantRank());
+            EvaluationRepository.EvalRun run = repository.findRun(runId).orElseThrow();
+            EvaluationConfig config = parseConfig(run.configJson());
+            Set<Long> completedCaseIds = repository.listCompletedCaseIds(runId);
+            for (EvaluationRepository.EvalCase evalCase : repository.listRunCases(runId)) {
+                if (completedCaseIds.contains(evalCase.id())) {
+                    continue;
+                }
+                CaseResult result = evaluateCase(evalCase, config);
                 repository.insertResult(runId, result);
             }
+            List<CaseResult> results = repository.listResults(runId);
+            List<Integer> firstRanks = results.stream().map(CaseResult::firstRelevantRank).toList();
             RetrievalMetrics metrics = RetrievalMetrics.calculate(firstRanks);
             Double faithfulness = average(results.stream().map(CaseResult::faithfulness).toList());
             Double answerCorrectness = average(results.stream().map(CaseResult::answerCorrectness).toList());
@@ -91,29 +142,31 @@ public class EvaluationService {
                     ? "COMPLETED_WITH_ERRORS"
                     : "COMPLETED";
             repository.completeRun(
-                    runId, status, metrics.totalCases(), metrics.hitAtK(), metrics.mrr(),
+                    runId, status, run.totalCases(), metrics.hitAtK(), metrics.mrr(),
                     faithfulness, answerCorrectness, null);
             recordRunMetric(runTimer, status);
-            return new RunReport(
-                    runId, kbId, name, status, effectiveConfig, metrics.totalCases(), metrics.hitCases(),
-                    metrics.hitAtK(), metrics.mrr(), faithfulness, answerCorrectness, results);
         } catch (Exception e) {
-            repository.completeRun(runId, "FAILED", results.size(), 0.0, 0.0, null, null, e.getMessage());
+            repository.failRun(runId, e.getMessage());
             recordRunMetric(runTimer, "FAILED");
-            throw e;
         }
-    }
-
-    public List<RunReport> runMatrix(Long kbId, String namePrefix, List<EvaluationConfig> configs) {
-        List<RunReport> reports = new ArrayList<>();
-        for (int i = 0; i < configs.size(); i++) {
-            reports.add(run(kbId, namePrefix + "-" + (i + 1), configs.get(i)));
-        }
-        return reports;
     }
 
     public List<RunSummary> listRuns(Long kbId) {
         return repository.listRuns(kbId);
+    }
+
+    public RunStatus getRun(long runId) {
+        EvaluationRepository.EvalRun run = repository.findRun(runId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "评测运行不存在"));
+        try {
+            return new RunStatus(
+                    run.id(), run.kbId(), run.name(), run.status(),
+                    parseConfig(run.configJson()), run.totalCases(), run.completedCases(),
+                    run.hitAtK(), run.mrr(), run.faithfulness(), run.answerCorrectness(),
+                    run.startedAt(), run.completedAt(), run.errorMessage());
+        } catch (Exception e) {
+            throw new IllegalStateException("评测配置解析失败", e);
+        }
     }
 
     private CaseResult evaluateCase(EvaluationRepository.EvalCase evalCase, EvaluationConfig config) {
@@ -208,6 +261,37 @@ public class EvaluationService {
         } catch (Exception e) {
             throw new IllegalStateException("评测配置序列化失败", e);
         }
+    }
+
+    private EvaluationConfig parseConfig(String value) {
+        try {
+            return objectMapper.readValue(value, EvaluationConfig.class).normalized();
+        } catch (Exception e) {
+            throw new IllegalStateException("评测配置解析失败", e);
+        }
+    }
+
+    private String fingerprint(
+            Long kbId, String name, EvaluationConfig config, List<EvaluationRepository.EvalCase> cases) {
+        String source = kbId + "\n" + name + "\n" + toJson(config) + "\n"
+                + cases.stream().map(EvaluationRepository.EvalCase::id).map(String::valueOf).collect(Collectors.joining(","));
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(source.getBytes(StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (Exception e) {
+            throw new IllegalStateException("生成评测幂等指纹失败", e);
+        }
+    }
+
+    private static String normalizeIdempotencyKey(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String key = value.trim();
+        if (key.length() > 128) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "Idempotency-Key 不能超过 128 个字符");
+        }
+        return key;
     }
 
     private static String stripCodeFence(String value) {

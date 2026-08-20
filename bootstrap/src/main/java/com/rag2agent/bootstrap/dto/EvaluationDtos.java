@@ -96,12 +96,36 @@ public final class EvaluationDtos {
             Double answerCorrectness,
             List<CaseResult> cases) {}
 
+    public record RunSubmission(
+            Long runId,
+            String status,
+            int totalCases,
+            int completedCases,
+            boolean reused) {}
+
+    public record RunStatus(
+            Long runId,
+            Long kbId,
+            String name,
+            String status,
+            EvaluationConfig config,
+            int totalCases,
+            int completedCases,
+            Double hitAtK,
+            Double mrr,
+            Double faithfulness,
+            Double answerCorrectness,
+            Instant startedAt,
+            Instant completedAt,
+            String errorMessage) {}
+
     public record RunSummary(
             Long runId,
             Long kbId,
             String name,
             String status,
             int totalCases,
+            int completedCases,
             Double hitAtK,
             Double mrr,
             Double faithfulness,

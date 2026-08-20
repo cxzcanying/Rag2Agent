@@ -70,7 +70,7 @@
 | 天 | 任务 | 主要交付 | 验收标准 |
 |---|---|---|---|
 | D1 | 评测可靠性收口 | 异步评测 run、状态/进度查询、幂等键、数据库对账；补评测异常测试 | 客户端断开不重复 run；超时/失败状态可查询；结果可从 `eval_run` 恢复 |
-| D2 | 上下文压缩与输入预算 | `ContextCompactor`、token budget、引用去重/截断、滚动摘要 fallback | 超长会话不触发模型上下文错误；记录压缩前后 token 和丢弃信息 |
+| D2 | 上下文压缩与输入预算 | `ContextCompactor`、token budget、引用去重/截断、确定性摘要 fallback | 已完成代码与确定性单测；真实 provider 上的上下文边界回归待中间件/API 可用后执行 |
 | D3 | 全链路追踪与日志 | Micrometer Observation 子 span、OTLP、Jaeger Compose、JSON trace 字段 | HTTP→检索→Rerank→LLM→Tool→MQ 可在 Jaeger 串联；日志可按 traceId 查询 |
 | D4 | 可靠性策略 | Resilience4j 重试/熔断/降级、API 限流、统一超时错误、输入防御 | 模型 429/5xx/超时有稳定 JSON；幂等请求不重复副作用；限流返回 429 |
 | D5 | 缓存与并行检索 | Caffeine L1 + Redis L2、查询 embedding/结果缓存、向量/关键词并行 | 命中率可观测；权限和版本不串缓存；两路并行延迟下降 |
