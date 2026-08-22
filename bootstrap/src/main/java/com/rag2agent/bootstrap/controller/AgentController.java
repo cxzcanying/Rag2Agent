@@ -12,7 +12,10 @@ import jakarta.validation.Valid;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.Map;
 import java.util.UUID;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -29,10 +32,12 @@ public class AgentController {
 
     private final AgentRunService agentRunService;
     private final ObjectMapper objectMapper;
+    private final Tracer tracer;
 
-    public AgentController(AgentRunService agentRunService, ObjectMapper objectMapper) {
+    public AgentController(AgentRunService agentRunService, ObjectMapper objectMapper, Tracer tracer) {
         this.agentRunService = agentRunService;
         this.objectMapper = objectMapper;
+        this.tracer = tracer;
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -48,6 +53,12 @@ public class AgentController {
         response.setHeader("Cache-Control", "no-cache");
         response.setHeader("Connection", "keep-alive");
         PrintWriter writer = response.getWriter();
+        Span currentSpan = tracer.currentSpan();
+        String traceId = currentSpan == null ? null : currentSpan.context().traceId();
+        if (traceId != null) {
+            response.setHeader("X-Trace-Id", traceId);
+            sendEvent(writer, new AgentEvent("trace", Map.of("traceId", traceId)));
+        }
 
         try {
             agentRunService.start(

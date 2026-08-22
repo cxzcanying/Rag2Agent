@@ -77,6 +77,14 @@
 | D6 | 模型与工具扩展 | provider registry、MCP transport/远程工具适配、工具 schema/审计/超时 | 新增 OpenAI-compatible provider 只改配置；新增只读工具不改 Agent 循环 |
 | D7 | 集成验收与成本治理 | 公开评测回归、Token/成本/队列指标、故障演练、文档和 CI 更新 | 核心测试绿；Jaeger 有完整样例；限流、熔断、恢复、重试、压缩均有证据 |
 
+### 第二版 D3 实际进度（全链路追踪与日志）
+
+- 已完成：RocketMQ 开发端口切换为宿主 `19091/19111/19112`，broker 实际监听 `19111`；Jaeger all-in-one 固定为 `1.60`，UI `16686`、OTLP HTTP `4318`。
+- 已完成：检索增加 `route/embedding/vector/keyword/rrf/rerank` Observation 子 span；原有 Agent 的 LLM/tool span 保留；MQ producer/consumer 增加 Observation，消息携带 `traceId`。
+- 已完成：`POST /api/chat` SSE 首事件返回 traceId，前端聊天消息显示“诊断 ID”，可用于日志和 Jaeger 查询。
+- 已验证：`/api/health` 返回 `UP`；Jaeger `/api/services` 已出现 `rag2agent`，可查询 HTTP span；前后端构建通过。
+- 未完成：RocketMQ 当前以消息属性携带 traceId，消费端建立独立 span，尚未实现跨进程 parent span 关联；需要后续接入标准传播器后再宣称 HTTP→MQ 单 trace 串联。
+
 ### V2 范围裁决
 
 - **本周必须做**：评测异步化、上下文预算、OTel/Jaeger 链路、结构化日志、限流/超时/重试/降级、幂等、Token 与缓存指标。

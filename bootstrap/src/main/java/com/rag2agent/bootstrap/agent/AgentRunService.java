@@ -11,7 +11,10 @@ import com.rag2agent.bootstrap.config.AgentProperties;
 import com.rag2agent.bootstrap.mapper.AgentRunMapper;
 import com.rag2agent.bootstrap.mapper.AgentStepMapper;
 import com.rag2agent.bootstrap.mapper.ToolCallRecordMapper;
+import com.rag2agent.bootstrap.mapper.DocumentMetaMapper;
+import com.rag2agent.bootstrap.entity.DocumentMeta;
 import com.rag2agent.bootstrap.service.HybridSearchService;
+import com.rag2agent.bootstrap.service.KnowledgeBaseService;
 import com.rag2agent.bootstrap.tool.Tool;
 import com.rag2agent.bootstrap.tool.ToolRegistry;
 import com.rag2agent.framework.common.ErrorCode;
@@ -32,10 +35,12 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
 /**
@@ -51,6 +56,10 @@ public class AgentRunService {
     private static final Duration MESSAGE_TTL = Duration.ofMinutes(30);
     private static final int DEFAULT_TOP_K = 5;
     private static final int DEFAULT_MAX_ITERATIONS = 10;
+    private static final Duration SESSION_LOCK_TTL = Duration.ofMinutes(30);
+    private static final String UNLOCK_SCRIPT =
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                    + "return redis.call('del', KEYS[1]) else return 0 end";
 
     private static final String SYSTEM_PROMPT = """
             你是一个企业知识库问答助手。回答必须基于检索到的知识库内容，并标注引用编号（如 [1]）。
@@ -70,6 +79,8 @@ public class AgentRunService {
     private final ObservationRegistry observationRegistry;
     private final AgentProperties agentProperties;
     private final ContextCompactor contextCompactor;
+    private final KnowledgeBaseService knowledgeBaseService;
+    private final DocumentMetaMapper documentMapper;
 
     public AgentRunService(
             ChatModelClient chatClient,
@@ -82,7 +93,9 @@ public class AgentRunService {
             StringRedisTemplate redis,
             MeterRegistry meterRegistry,
             ObservationRegistry observationRegistry,
-            AgentProperties agentProperties) {
+            AgentProperties agentProperties,
+            KnowledgeBaseService knowledgeBaseService,
+            DocumentMetaMapper documentMapper) {
         this.chatClient = chatClient;
         this.searchService = searchService;
         this.toolRegistry = toolRegistry;
@@ -95,10 +108,43 @@ public class AgentRunService {
         this.observationRegistry = observationRegistry;
         this.agentProperties = agentProperties;
         this.contextCompactor = new ContextCompactor(agentProperties.getSummaryMaxChars());
+        this.knowledgeBaseService = knowledgeBaseService;
+        this.documentMapper = documentMapper;
     }
 
     public AgentExecutionResult start(
             Long userId, String sessionId, String query, Long kbId, Consumer<AgentEvent> onEvent) {
+        if (userId == null || userId <= 0 || sessionId == null
+                || sessionId.isBlank() || sessionId.length() > 64) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "用户或 sessionId 无效");
+        }
+        String lockKey = "rag2agent:agent:session-lock:" + userId + ":" + sessionId;
+        String lockToken = UUID.randomUUID().toString();
+        if (!Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(lockKey, lockToken, SESSION_LOCK_TTL))) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "该会话已有请求正在执行，请稍后重试");
+        }
+        try {
+            return startLocked(userId, sessionId, query, kbId, onEvent);
+        } finally {
+            redis.execute(new DefaultRedisScript<>(UNLOCK_SCRIPT, Long.class), List.of(lockKey), lockToken);
+        }
+    }
+
+    private AgentExecutionResult startLocked(
+            Long userId, String sessionId, String query, Long kbId, Consumer<AgentEvent> onEvent) {
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "用户未登录");
+        }
+        if (kbId == null || kbId <= 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "kbId 必须为正数");
+        }
+        knowledgeBaseService.requireOwned(userId, kbId);
+        if (query == null || query.isBlank()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "query 不能为空");
+        }
+        if (sessionId == null || sessionId.isBlank() || sessionId.length() > 64) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "sessionId 无效");
+        }
         if (query.length() > agentProperties.getMaxInputChars()) {
             throw new BusinessException(
                     ErrorCode.BAD_REQUEST,
@@ -130,12 +176,19 @@ public class AgentRunService {
         saveMessages(run.getId(), messages);
         saveReferences(run.getId(), references);
 
-        return executeLoop(run.getId(), messages, references, run.getMaxIterations(), onEvent);
+        return executeLoop(run.getId(), run.getUserId(), messages, references, run.getMaxIterations(), onEvent);
     }
 
     public AgentExecutionResult approve(Long runId, boolean approved, Consumer<AgentEvent> onEvent) {
+        if (runId == null || runId <= 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "runId 必须为正数");
+        }
         AgentRun run = runMapper.selectById(runId);
         if (run == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "Agent 执行不存在");
+        }
+        Long currentUserId = cn.dev33.satoken.stp.StpUtil.getLoginIdAsLong();
+        if (!currentUserId.equals(run.getUserId())) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "Agent 执行不存在");
         }
         // CAS 抢占审批：把 WAITING_APPROVAL 置为 EXECUTING，影响行数为 0 说明已被并发审批处理，避免重复执行工具
@@ -150,7 +203,11 @@ public class AgentRunService {
         ToolCallRecord pending = toolCallMapper.listByRunId(runId).stream()
                 .filter(call -> "WAITING_APPROVAL".equals(call.getStatus()))
                 .findFirst()
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "待审批工具调用不存在"));
+                .orElseGet(() -> null);
+        if (pending == null || toolCallMapper.claimApproval(pending.getId(), runId) != 1) {
+            updateStatus(runId, "FAILED");
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "待审批工具调用已被处理或不存在");
+        }
 
         List<ChatMessage> messages = loadMessages(runId);
         List<Reference> references = loadReferences(runId);
@@ -159,7 +216,7 @@ public class AgentRunService {
         if (approved) {
             String output;
             try {
-                output = executeTool(pending.getToolName(), parseArguments(pending.getInput()));
+                output = executeTool(run.getUserId(), pending.getToolName(), parseArguments(pending.getInput()));
                 pending.setStatus("SUCCEEDED");
                 pending.setOutput(toJson(output));
             } catch (Exception e) {
@@ -181,11 +238,11 @@ public class AgentRunService {
         }
 
         saveMessages(runId, messages);
-        return executeLoop(runId, messages, references, run.getMaxIterations(), onEvent);
+        return executeLoop(runId, run.getUserId(), messages, references, run.getMaxIterations(), onEvent);
     }
 
     private AgentExecutionResult executeLoop(
-            Long runId, List<ChatMessage> messages, List<Reference> references,
+            Long runId, Long userId, List<ChatMessage> messages, List<Reference> references,
             int maxIterations, Consumer<AgentEvent> onEvent) {
         updateStatus(runId, "EXECUTING");
 
@@ -258,7 +315,7 @@ public class AgentRunService {
                             "name", toolCall.name(), "arguments", toolCall.arguments())));
                     String output;
                     try {
-                        output = executeTool(toolCall.name(), parseArguments(toolCall.arguments()));
+                        output = executeTool(userId, toolCall.name(), parseArguments(toolCall.arguments()));
                     } catch (Exception e) {
                         output = "工具执行失败: " + e.getMessage();
                     }
@@ -303,7 +360,8 @@ public class AgentRunService {
         return references;
     }
 
-    private String executeTool(String toolName, Map<String, Object> arguments) {
+    private String executeTool(Long userId, String toolName, Map<String, Object> arguments) {
+        validateToolAccess(userId, toolName, arguments);
         Tool tool = toolRegistry.get(toolName);
         if (tool == null) {
             throw new IllegalStateException("未知工具: " + toolName);
@@ -323,6 +381,28 @@ public class AgentRunService {
                     .tag("outcome", outcome)
                     .publishPercentileHistogram()
                     .register(meterRegistry));
+        }
+    }
+
+    private void validateToolAccess(Long userId, String toolName, Map<String, Object> arguments) {
+        if ("search_knowledge_base".equals(toolName)) {
+            Object value = arguments.get("kb_id");
+            if (!(value instanceof Number number)) {
+                throw new BusinessException(ErrorCode.BAD_REQUEST, "工具参数 kb_id 无效");
+            }
+            knowledgeBaseService.requireOwned(userId, number.longValue());
+            return;
+        }
+        if ("delete_document".equals(toolName)) {
+            Object value = arguments.get("document_id");
+            if (!(value instanceof Number number)) {
+                throw new BusinessException(ErrorCode.BAD_REQUEST, "工具参数 document_id 无效");
+            }
+            DocumentMeta document = documentMapper.selectById(number.longValue());
+            if (document == null) {
+                throw new BusinessException(ErrorCode.NOT_FOUND, "文档不存在");
+            }
+            knowledgeBaseService.requireOwned(userId, document.getKbId());
         }
     }
 

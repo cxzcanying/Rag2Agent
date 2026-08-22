@@ -95,20 +95,28 @@ public class HybridSearchService {
 
     private List<RetrievalResult> doSearch(Long kbId, String query, SearchOptions options) {
         // 规则路由：疑问句大部分情况是开放式问题走语义（只向量），短词/编号是专业术语走关键词（省一次 embedding），其余混合
-        Route route = resolveRoute(options.strategy(), query);
+        Route route = Observation.createNotStarted("rag2agent.search.route", observationRegistry)
+                .lowCardinalityKeyValue("strategy", metricStrategy(options))
+                .observe(() -> resolveRoute(options.strategy(), query));
         // 向量路：只有 KEYWORD 路由才跳过（短词向量化容易语义漂移，直接走关键词更准）
         List<RetrievalResult> vectorResults = (route != Route.KEYWORD)
-                ? vectorSearch(kbId, embedQuery(query), options.candidateTopK())
+                ? Observation.createNotStarted("rag2agent.search.vector", observationRegistry)
+                        .lowCardinalityKeyValue("route", route.name().toLowerCase(Locale.ROOT))
+                        .observe(() -> vectorSearch(kbId, embedQuery(query), options.candidateTopK()))
                 : List.of();
         // 关键词路：SEMANTIC 路由跳过（疑问句关键词召回意义不大，省一次 SQL）
         List<RetrievalResult> keywordResults = (route != Route.SEMANTIC)
-                ? keywordSearch(kbId, query, options.candidateTopK())
+                ? Observation.createNotStarted("rag2agent.search.keyword", observationRegistry)
+                        .lowCardinalityKeyValue("route", route.name().toLowerCase(Locale.ROOT))
+                        .observe(() -> keywordSearch(kbId, query, options.candidateTopK()))
                 : List.of();
 
         // RRF 融合两路结果，分数域统一、同名 chunk 去重累加
         int fusedTopK = options.rerankEnabled() ? options.candidateTopK() : options.topK();
-        List<RetrievalResult> fused =
-                RrfFusion.fuse(List.of(vectorResults, keywordResults), fusedTopK, options.rrfK());
+        List<RetrievalResult> fused = Observation.createNotStarted("rag2agent.search.rrf", observationRegistry)
+                .lowCardinalityKeyValue("route", route.name().toLowerCase(Locale.ROOT))
+                .observe(() -> RrfFusion.fuse(
+                        List.of(vectorResults, keywordResults), fusedTopK, options.rrfK()));
         // 两路都没有候选：直接返回空，避免拿空列表去调 rerank 白花钱
         if (fused.isEmpty()) {
             return List.of();
@@ -117,7 +125,9 @@ public class HybridSearchService {
             return fused.stream().limit(options.topK()).toList();
         }
         // 精排：用 cross-encoder 对融合后的候选重新打分，取 topK
-        return rerank(query, fused, options.topK()).stream()
+        return Observation.createNotStarted("rag2agent.search.rerank", observationRegistry)
+                .lowCardinalityKeyValue("enabled", "true")
+                .observe(() -> rerank(query, fused, options.topK())).stream()
                 .filter(result -> options.rerankMinScore() == null
                         || result.score() >= options.rerankMinScore())
                 .toList();
@@ -141,8 +151,11 @@ public class HybridSearchService {
      * model 传 null 表示走 provider 配置里的默认模型（BAAI/bge-m3）。
      */
     private List<Float> embedQuery(String query) {
-        EmbeddingResponse response =
-                embeddingClient.embed(new EmbeddingRequest("siliconflow", null, List.of(query)));
+        EmbeddingResponse response = Observation.createNotStarted(
+                        "rag2agent.search.embedding", observationRegistry)
+                .lowCardinalityKeyValue("provider", "siliconflow")
+                .observe(() -> embeddingClient.embed(new EmbeddingRequest(
+                        "siliconflow", null, List.of(query))));
         // 向量化失败宁可抛异常，也不返回空结果让上层误以为"没查到"
         if (response.vectors().isEmpty()) {
             throw new IllegalStateException("查询向量化返回为空");

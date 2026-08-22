@@ -16,9 +16,13 @@ import com.rag2agent.rag.core.split.TextChunk;
 import com.rag2agent.rag.core.split.impl.RecursiveTextSplitter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -43,6 +47,10 @@ public class IngestPipelineService {
 
     private static final Logger log = LoggerFactory.getLogger(IngestPipelineService.class);
     private static final int EMBEDDING_BATCH_SIZE = 16;
+    private static final Duration INGEST_LOCK_TTL = Duration.ofHours(2);
+    private static final String UNLOCK_SCRIPT =
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                    + "return redis.call('del', KEYS[1]) else return 0 end";
 
     private final DocumentMetaMapper documentMapper;
     private final DocumentChunkMapper chunkMapper;
@@ -50,6 +58,7 @@ public class IngestPipelineService {
     private final EmbeddingClient embeddingClient;
     private final IngestTaskService ingestTaskService;
     private final TransactionTemplate transactionTemplate;
+    private final StringRedisTemplate redis;
 
     public IngestPipelineService(
             DocumentMetaMapper documentMapper,
@@ -57,7 +66,8 @@ public class IngestPipelineService {
             MinioStorageService storage,
             EmbeddingClient embeddingClient,
             IngestTaskService ingestTaskService,
-            PlatformTransactionManager transactionManager) {
+            PlatformTransactionManager transactionManager,
+            StringRedisTemplate redis) {
         this.documentMapper = documentMapper;
         this.chunkMapper = chunkMapper;
         this.storage = storage;
@@ -66,9 +76,32 @@ public class IngestPipelineService {
         // 编程式事务：版本切换需要"更新文档版本 + 删除旧 chunk"原子完成，@Transactional 不适合跨方法编排，
         // 用 TransactionTemplate 在方法内部精确控制事务边界。
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.redis = redis;
     }
 
     public void process(Long documentId) {
+        process(documentId, null);
+    }
+
+    public void process(Long documentId, Long taskId) {
+        if (documentId == null || documentId <= 0) {
+            throw new IllegalArgumentException("documentId 必须为正数");
+        }
+        String lockKey = "rag2agent:ingest:lock:" + documentId;
+        String lockToken = UUID.randomUUID().toString();
+        if (!Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(lockKey, lockToken, INGEST_LOCK_TTL))) {
+            throw new IllegalStateException("同一文档正在入库，稍后重试: " + documentId);
+        }
+        try {
+            processLocked(documentId, taskId);
+        } finally {
+            redis.execute(
+                    new DefaultRedisScript<>(UNLOCK_SCRIPT, Long.class),
+                    List.of(lockKey), lockToken);
+        }
+    }
+
+    private void processLocked(Long documentId, Long taskId) {
         // 前置校验：文档必须存在且为 PDF（第一版仅支持文本型 PDF）
         DocumentMeta document = documentMapper.selectById(documentId);
         if (document == null) {
@@ -80,9 +113,14 @@ public class IngestPipelineService {
 
         // 幂等保护：RocketMQ 重试时同一消息可能被再次消费，
         // 任务已是 INDEXED 说明上次已成功，直接跳过避免重复入库。
-        IngestTask task = ingestTaskService.latestByDocument(documentId);
+        IngestTask task = taskId == null
+                ? ingestTaskService.latestByDocument(documentId)
+                : ingestTaskService.findById(taskId);
         if (task == null) {
             throw new IllegalStateException("入库任务不存在: " + documentId);
+        }
+        if (!documentId.equals(task.getDocumentId())) {
+            throw new IllegalStateException("入库任务与文档不匹配: " + task.getId());
         }
         if ("INDEXED".equals(task.getStatus())) {
             log.info("任务已完成，跳过重复消费: documentId={}", documentId);
@@ -178,10 +216,13 @@ public class IngestPipelineService {
         // 事务边界：更新文档版本/状态 + 删除旧版本 chunk 必须原子完成。
         // 若只更新版本号而旧 chunk 未删净，检索会混入上一版内容，形成"版本新、数据旧"的中间态。
         transactionTemplate.executeWithoutResult(status -> {
-            documentMapper.update(null, new LambdaUpdateWrapper<DocumentMeta>()
+            int updated = documentMapper.update(null, new LambdaUpdateWrapper<DocumentMeta>()
                     .eq(DocumentMeta::getId, documentId)
                     .set(DocumentMeta::getVersion, version)
                     .set(DocumentMeta::getStatus, "INDEXED"));
+            if (updated != 1) {
+                throw new IllegalStateException("文档版本切换失败: " + documentId);
+            }
             chunkMapper.deleteBelowVersion(documentId, version);
         });
     }

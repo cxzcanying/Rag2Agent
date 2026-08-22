@@ -2,6 +2,7 @@ package com.rag2agent.bootstrap.mapper;
 
 import com.rag2agent.bootstrap.entity.ToolCallRecord;
 import java.util.List;
+import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Select;
@@ -31,6 +32,10 @@ public interface ToolCallRecordMapper {
             WHERE id = #{id}
             """)
     int updateResult(ToolCallRecord record);
+
+    @Update("UPDATE tool_call SET status = 'EXECUTING', updated_at = now() "
+            + "WHERE id = #{id} AND run_id = #{runId} AND status = 'WAITING_APPROVAL'")
+    int claimApproval(@Param("id") Long id, @Param("runId") Long runId);
 
     @Select("SELECT * FROM tool_call WHERE run_id = #{runId} ORDER BY id")
     List<ToolCallRecord> listByRunId(Long runId);

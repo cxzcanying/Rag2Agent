@@ -4,13 +4,13 @@
 
 ## P0 并发正确性
 
-- [ ] **同一文档并发入库竞态**（IngestPipelineService.process）
+- [x] **同一文档并发入库竞态**（IngestPipelineService.process）
   - 问题：`nextVersion` 是"读旧值 +1"的无锁计算；`INDEXED` 幂等检查是"先查后执行"非原子。RocketMQ 重试消息与新消息并发时，两个消费者可能同时算出相同版本、重复写入 chunk，`switchVersion` 相互覆盖。
   - 方案：按 documentId 加 Redis 分布式锁（入库锁，锁内完成整个 process）；或 `switchVersion` 改为乐观锁（`UPDATE document SET version=? WHERE id=? AND version=?`，影响行数为 0 则放弃并提示重试）。
 - [x] **任务状态机更新无 CAS**（IngestTaskService）✅ 已修复（防御性）
   - 问题：`markStage/markFailed/markIndexed` 无条件 UPDATE，并发下旧任务状态可能覆盖新任务。
   - 方案：UPDATE 带前置状态条件。已落地：三个方法均加 `ne(status, 'INDEXED')`，保护 INDEXED 终态不被并发/重试覆盖；"影响行数为 0 停止处理"的完整 CAS 归入并发竞态项一并处理。
-- [ ] **消息只携带 documentId，未携带 taskId**（IngestMessageService）
+- [x] **消息只携带 documentId，未携带 taskId**（IngestMessageService）
   - 问题：消费端 `latestByDocument` 取"最新任务"，同一文档存在多个任务（重复上传 + 失败遗留）时，重试可能处理到错误任务。
   - 方案：消息体改为 `{documentId, taskId}`，process 按 taskId 直接定位任务。
 - [x] **Agent 审批并发无防护**（AgentRunService.approve）✅ 已修复
@@ -64,10 +64,10 @@
 - [ ] **SSE 流式解析未覆盖多行 data 与断连重连**（OpenAiChatModelClient.stream）
   - 问题：只认单行 `data:` 前缀，多行 data、`event:` 字段、断连半包都未处理；真实网关分块行为与 mock 不同。
   - 方案：实现 SSE 事件状态机（data 多行聚合、`[DONE]` 终止、超时/断连重连），D11-D12 对话接口前补齐。
-- [ ] **AuthService.register 并发竞态**（selectCount + insert 非原子）
+- [x] **AuthService.register 并发竞态**（selectCount + insert 非原子）
   - 问题：并发注册同名用户可能同时通过 selectCount 检查，靠 DB 唯一约束兜底会抛 500 而非友好错误。
   - 方案：username 建唯一约束并捕获 DuplicateKeyException 转 BAD_REQUEST，或注册加分布式锁。
-- [ ] **检索/文档/Agent 链路缺 kbId 归属校验（越权）**（SearchController / DocumentController / Agent 工具层 / 审批接口）
+- [x] **检索/文档/Agent 链路缺 kbId 归属校验（越权）**（SearchController / DocumentController / Agent 工具层 / 审批接口）
   - 问题：登录校验已由全局 Sa-Token 拦截器覆盖，但接口只按 kbId/documentId 过滤：检索接口可查任意 kb_id；`search_knowledge_base` 工具用模型传入的 kb_id 检索；`delete_document` 工具可删任意 document_id；`/api/agent/approvals/{runId}` 不校验 run 归属当前用户。登录用户可越权访问他人知识库、审批他人操作。
   - 方案：统一 ACL——kb_id → owner、document → kb → owner、run → user 归属校验，与 KnowledgeBaseService.list 的 ACL 同批落地。
 - [ ] **只读工具调用未落库审计**（AgentRunService.executeLoop）
@@ -95,9 +95,10 @@
 ### P0 可观测性
 
 - [ ] **RAG 全链路追踪与结构化日志**（部分已有）
-  - 当前：已有 Micrometer、OTel tracing bridge、JSON 日志和检索/Agent 局部 Observation；尚未证明 route → retrieve → rerank → LLM → tool → RocketMQ 的 span 能在 Jaeger 中完整串起来，也没有统一关键字段规范。
+  - 当前：已有 Micrometer、OTel tracing bridge、JSON 日志；检索已补齐 route/embedding/vector/keyword/RRF/rerank 子 span，Agent 保留 LLM/tool span，MQ producer/consumer 已有 Observation，消息携带 traceId；SSE/前端显示诊断 ID。
   - 方案：采用成熟组合 Micrometer Observation + OpenTelemetry OTLP + Jaeger；为 route、embedding、vector、keyword、RRF、rerank、LLM、tool、MQ consumer 建子 span。JSON 日志统一输出 `traceId/spanId/runId/kbId/userId/provider/model/latencyMs/candidateCount/resultCount/outcome`，严禁输出 prompt、密钥和完整文档内容。
-  - 验收：一次 Agent 请求在 Jaeger 中可展开完整链路；任意失败日志可用 `traceId` 反查 span 和数据库 run/step。
+  - 当前证据：`/api/health` 已在 Jaeger 查询到 `rag2agent` HTTP span；RocketMQ broker 已在高位端口健康运行。
+  - 未完成：MQ 消费端目前以消息属性携带 traceId 并建立独立 span，尚未完成跨进程 parent span 关联；完整 Agent 请求与数据库 run/step 的统一字段验收待后续补齐。
 
 - [ ] **业务指标补全**（部分已有）
   - 当前：已有检索耗时、结果数、LLM 耗时、Token、Agent transition 指标；没有缓存命中率、provider 限流/重试/熔断、上下文压缩、队列积压等指标。
@@ -120,6 +121,15 @@
   - 当前：入库任务有部分重试幂等，但同名上传、创建知识库和 Agent 请求仍可能因网络重试产生重复业务对象；相关竞态已在本清单前文列出。
   - 方案：API 接受 `Idempotency-Key`；数据库对 `owner + key`、`kb_id + checksum` 建唯一约束；上传按文件 hash 决定复用或新版本；Agent 请求按 `userId + sessionId + clientRequestId` 去重。
   - 验收：同一请求重放只返回第一次结果；并发重放不重复上传、入库、扣费或执行工具副作用。
+  - 当前残留风险：Agent 已增加同一用户同一 session 的并发 Redis 锁，可阻止双击/并发请求；但请求完成后再次重试仍会创建新 run。后续需在 `ChatRequest` 增加 `clientRequestId`，并按 `userId + clientRequestId` 做数据库/Redis 幂等去重。
+
+- [ ] **Redis 分布式锁租约续期**
+  - 当前残留风险：入库锁 TTL 为 2 小时，Agent session 锁 TTL 为 30 分钟；若模型或 embedding 链路超过 TTL，锁可能自动过期，导致第二个请求重新进入并发执行。
+  - 方案：为长任务增加 watchdog/租约续期，续期脚本必须校验 token；任务结束仍使用 compare-and-delete 释放，避免误删其他请求的锁。
+
+- [ ] **RocketMQ 跨进程 parent span 传播**
+  - 当前残留风险：消息属性已携带业务 `traceId`，消费端也建立了独立 Observation，但尚未使用标准 OpenTelemetry `traceparent` 注入/提取，因此 Jaeger 中 producer 与 consumer 可能不是同一条父子链路。
+  - 方案：使用 `TextMapPropagator` 将 `traceparent/tracestate` 写入 RocketMQ user properties，消费端提取后创建带 parent context 的 consumer span，并增加 Jaeger 链路验收测试。
 
 ### P1 可插拔与动态配置
 

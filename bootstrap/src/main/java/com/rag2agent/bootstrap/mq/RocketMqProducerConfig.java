@@ -17,7 +17,7 @@ public class RocketMqProducerConfig {
 
     @Bean(destroyMethod = "shutdown")
     public DefaultMQProducer rocketMqProducer(
-            @Value("${ROCKETMQ_NAMESRV:localhost:9876}") String namesrvAddr) throws Exception {
+            @Value("${ROCKETMQ_NAMESRV:localhost:19876}") String namesrvAddr) throws Exception {
         DefaultMQProducer producer = new DefaultMQProducer("rag2agent-ingest-producer");
         producer.setNamesrvAddr(namesrvAddr);
         producer.setSendMsgTimeout(3000);

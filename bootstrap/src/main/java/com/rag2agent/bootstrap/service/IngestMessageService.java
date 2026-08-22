@@ -1,9 +1,16 @@
 package com.rag2agent.bootstrap.service;
 
 import com.rag2agent.bootstrap.mq.RocketMqProducerConfig;
+import com.rag2agent.bootstrap.mq.IngestTaskMessage;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.framework.common.ErrorCode;
 import com.rag2agent.framework.exception.BusinessException;
 import java.nio.charset.StandardCharsets;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
 import org.apache.rocketmq.client.producer.DefaultMQProducer;
 import org.apache.rocketmq.common.message.Message;
 import org.slf4j.Logger;
@@ -20,20 +27,60 @@ public class IngestMessageService {
     private static final Logger log = LoggerFactory.getLogger(IngestMessageService.class);
 
     private final DefaultMQProducer producer;
+    private final ObservationRegistry observationRegistry;
+    private final Tracer tracer;
+    private final ObjectMapper objectMapper;
 
-    public IngestMessageService(DefaultMQProducer producer) {
+    public IngestMessageService(
+            DefaultMQProducer producer,
+            ObservationRegistry observationRegistry,
+            Tracer tracer,
+            ObjectMapper objectMapper) {
         this.producer = producer;
+        this.observationRegistry = observationRegistry;
+        this.tracer = tracer;
+        this.objectMapper = objectMapper;
     }
 
     public void sendIngestTask(Long documentId) {
+        sendIngestTask(documentId, null);
+    }
+
+    public void sendIngestTask(Long documentId, Long taskId) {
         try {
-            Message message = new Message(
-                    RocketMqProducerConfig.INGEST_TOPIC, //使用TOPIC发布订阅模式
-                    String.valueOf(documentId).getBytes(StandardCharsets.UTF_8));
-            producer.send(message);
-            log.info("入库任务消息已发送: documentId={}", documentId);
+            Span currentSpan = tracer.currentSpan();
+            String traceId = currentSpan == null ? "" : currentSpan.context().traceId();
+            Observation.createNotStarted("rag2agent.mq.producer", observationRegistry)
+                    .lowCardinalityKeyValue("topic", RocketMqProducerConfig.INGEST_TOPIC)
+                    .observe(() -> {
+                        Message message = new Message(
+                                RocketMqProducerConfig.INGEST_TOPIC, //使用TOPIC发布订阅模式
+                                messageBodyUnchecked(documentId, taskId).getBytes(StandardCharsets.UTF_8));
+                        if (!traceId.isBlank()) {
+                            message.putUserProperty("traceId", traceId);
+                        }
+                        try {
+                            producer.send(message);
+                        } catch (Exception e) {
+                            throw new IllegalStateException("RocketMQ 消息发送失败", e);
+                        }
+                        return null;
+                    });
+            log.info("入库任务消息已发送: documentId={}, traceId={}", documentId, traceId);
         } catch (Exception e) {
             throw new BusinessException(ErrorCode.INTERNAL_ERROR, "发送入库任务失败: " + e.getMessage());
+        }
+    }
+
+    private String messageBody(Long documentId, Long taskId) throws JsonProcessingException {
+        return objectMapper.writeValueAsString(new IngestTaskMessage(documentId, taskId));
+    }
+
+    private String messageBodyUnchecked(Long documentId, Long taskId) {
+        try {
+            return messageBody(documentId, taskId);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("入库消息序列化失败", e);
         }
     }
 }

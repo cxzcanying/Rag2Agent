@@ -11,6 +11,7 @@ import com.rag2agent.bootstrap.mapper.AppUserMapper;
 import com.rag2agent.framework.common.ErrorCode;
 import com.rag2agent.framework.exception.BusinessException;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -38,7 +39,12 @@ public class AuthService {
         user.setUsername(request.username());
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setNickname(StringUtils.hasText(request.nickname()) ? request.nickname() : request.username());
-        userMapper.insert(user);
+        try {
+            userMapper.insert(user);
+        } catch (DuplicateKeyException e) {
+            // selectCount + insert 不是原子操作，并发注册时以数据库唯一约束为最终裁判。
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "用户名已存在");
+        }
         return UserView.from(user);
     }
 

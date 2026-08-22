@@ -36,6 +36,10 @@ public class IngestTaskService {
                 .last("LIMIT 1"));
     }
 
+    public IngestTask findById(Long taskId) {
+        return taskId == null || taskId <= 0 ? null : taskMapper.selectById(taskId);
+    }
+
     public void markStage(Long taskId, String stage) {
         taskMapper.update(null, new LambdaUpdateWrapper<IngestTask>()
                 .eq(IngestTask::getId, taskId)
@@ -65,11 +69,15 @@ public class IngestTaskService {
 
     // 手动重试：重置任务为 PENDING，供 reingest 使用
     public void resetToPending(Long taskId) {
-        taskMapper.update(null, new LambdaUpdateWrapper<IngestTask>()
+        int updated = taskMapper.update(null, new LambdaUpdateWrapper<IngestTask>()
                 .eq(IngestTask::getId, taskId)
+                .eq(IngestTask::getStatus, "FAILED")
                 .set(IngestTask::getStatus, "PENDING")
                 .set(IngestTask::getCurrentStage, "PENDING")
                 .set(IngestTask::getErrorMessage, null));
+        if (updated != 1) {
+            throw new IllegalStateException("任务状态已变化，无法重置为 PENDING: " + taskId);
+        }
     }
 
     private String truncate(String message) {

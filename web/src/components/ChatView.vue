@@ -43,7 +43,7 @@ async function send() {
   const q = question.value.trim()
   question.value = ''
   messages.value.push({ role: 'user', content: q })
-  messages.value.push({ role: 'assistant', content: '', references: [], contextCompression: null })
+  messages.value.push({ role: 'assistant', content: '', references: [], contextCompression: null, traceId: null })
   // 关键：push 后从响应式数组取回的是 reactive 代理，后续 handleEvent 修改它才会触发渲染与持久化；
   // 如果在 push 前持有原始对象引用，修改会绕过 Vue 响应式，导致答案不刷新、localStorage 存旧值。
   const assistant = messages.value[messages.value.length - 1]
@@ -68,6 +68,9 @@ function handleEvent(msg, event) {
     case 'context_compaction':
       msg.contextCompression = event.data || null
       processStage.value = event.data?.status === 'started' ? '上下文压缩中...' : '上下文已压缩，正在继续处理...'
+      break
+    case 'trace':
+      msg.traceId = event.data?.traceId || null
       break
     case 'reference':
       msg.references = event.data || []
@@ -122,6 +125,10 @@ async function approve(approved) {
     <div class="messages">
       <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
         <div class="bubble">{{ m.content }}</div>
+
+        <div v-if="m.traceId" class="trace-id" title="可用于服务端日志和 Jaeger 查询">
+          诊断 ID：{{ m.traceId }}
+        </div>
 
         <div
           v-if="m.contextCompression"
@@ -210,6 +217,13 @@ async function approve(approved) {
   line-height: 1.6;
   text-align: left;
   white-space: pre-wrap;
+}
+.trace-id {
+  margin-top: 4px;
+  color: #909399;
+  font-size: 11px;
+  text-align: left;
+  word-break: break-all;
 }
 .context-compression {
   display: inline-flex;

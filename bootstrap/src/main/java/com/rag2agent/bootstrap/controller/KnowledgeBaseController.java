@@ -35,6 +35,6 @@ public class KnowledgeBaseController {
 
     @GetMapping
     public ApiResponse<List<KnowledgeBaseView>> list() {
-        return ApiResponse.success(kbService.list());
+        return ApiResponse.success(kbService.list(StpUtil.getLoginIdAsLong()));
     }
 }

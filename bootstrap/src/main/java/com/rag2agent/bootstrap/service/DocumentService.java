@@ -21,7 +21,7 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 public class DocumentService {
 
-    private static final Set<String> ALLOWED_EXTENSIONS = Set.of("pdf", "txt", "md", "docx");
+    private static final Set<String> ALLOWED_EXTENSIONS = Set.of("pdf");
     private static final long MAX_SIZE = 50L * 1024 * 1024;
     private static final int PRESIGN_EXPIRY_SECONDS = 600;
 
@@ -29,19 +29,26 @@ public class DocumentService {
     private final MinioStorageService storage;
     private final IngestTaskService ingestTaskService;
     private final IngestMessageService ingestMessageService;
+    private final KnowledgeBaseService knowledgeBaseService;
 
     public DocumentService(
             DocumentMetaMapper documentMapper,
             MinioStorageService storage,
             IngestTaskService ingestTaskService,
-            IngestMessageService ingestMessageService) {
+            IngestMessageService ingestMessageService,
+            KnowledgeBaseService knowledgeBaseService) {
         this.documentMapper = documentMapper;
         this.storage = storage;
         this.ingestTaskService = ingestTaskService;
         this.ingestMessageService = ingestMessageService;
+        this.knowledgeBaseService = knowledgeBaseService;
     }
 
-    public DocumentView upload(Long kbId, MultipartFile file) {
+    public DocumentView upload(Long userId, Long kbId, MultipartFile file) {
+        if (kbId == null || kbId <= 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "kbId 必须为正数");
+        }
+        knowledgeBaseService.requireOwned(userId, kbId);
         if (file == null || file.isEmpty()) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "文件不能为空");
         }
@@ -51,7 +58,7 @@ public class DocumentService {
         String fileName = StringUtils.cleanPath(file.getOriginalFilename() == null ? "unnamed" : file.getOriginalFilename());
         String ext = extensionOf(fileName);
         if (!ALLOWED_EXTENSIONS.contains(ext)) {
-            throw new BusinessException(ErrorCode.BAD_REQUEST, "仅支持 pdf/txt/md/docx 文件");
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "当前仅支持 PDF 文件");
         }
 
         String objectKey =
@@ -74,7 +81,7 @@ public class DocumentService {
         documentMapper.insert(doc);
         Long taskId = ingestTaskService.create(doc.getId());
         try {
-            ingestMessageService.sendIngestTask(doc.getId());
+            ingestMessageService.sendIngestTask(doc.getId(), taskId);
         } catch (Exception e) {
             // 消息发送失败时文档和任务已落库，标记任务失败避免留下永远无人处理的 PENDING 脏数据
             ingestTaskService.markFailed(taskId, "入库消息发送失败: " + e.getMessage());
@@ -83,7 +90,8 @@ public class DocumentService {
         return DocumentView.from(doc);
     }
 
-    public List<DocumentView> listByKb(Long kbId) {
+    public List<DocumentView> listByKb(Long userId, Long kbId) {
+        knowledgeBaseService.requireOwned(userId, kbId);
         return documentMapper.selectList(
                         new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<DocumentMeta>()
                                 .eq(DocumentMeta::getKbId, kbId)
@@ -93,11 +101,12 @@ public class DocumentService {
                 .toList();
     }
 
-    public PresignResponse presign(Long documentId) {
+    public PresignResponse presign(Long userId, Long documentId) {
         DocumentMeta doc = documentMapper.selectById(documentId);
         if (doc == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "文档不存在");
         }
+        knowledgeBaseService.requireOwned(userId, doc.getKbId());
         try {
             String url = storage.presignGet(doc.getStoragePath(), PRESIGN_EXPIRY_SECONDS);
             return new PresignResponse(url, PRESIGN_EXPIRY_SECONDS);
@@ -110,17 +119,29 @@ public class DocumentService {
      * 失败任务手动重试：重置最新任务为 PENDING 后重新发送入库消息。
      * 解决 RocketMQ 重试耗尽进死信后没有人工触发入口的问题。
      */
-    public DocumentView reingest(Long documentId) {
+    public DocumentView reingest(Long userId, Long documentId) {
+        if (documentId == null || documentId <= 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "documentId 必须为正数");
+        }
         DocumentMeta doc = documentMapper.selectById(documentId);
         if (doc == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "文档不存在");
         }
+        knowledgeBaseService.requireOwned(userId, doc.getKbId());
         IngestTask task = ingestTaskService.latestByDocument(documentId);
         if (task == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "入库任务不存在");
         }
+        if (!"FAILED".equals(task.getStatus())) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "只有 FAILED 任务允许手动重试");
+        }
         ingestTaskService.resetToPending(task.getId());
-        ingestMessageService.sendIngestTask(documentId);
+        try {
+            ingestMessageService.sendIngestTask(documentId, task.getId());
+        } catch (Exception e) {
+            ingestTaskService.markFailed(task.getId(), "入库消息发送失败: " + e.getMessage());
+            throw e;
+        }
         return DocumentView.from(doc);
     }
 

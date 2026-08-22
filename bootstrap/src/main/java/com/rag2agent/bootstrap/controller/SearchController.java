@@ -1,6 +1,8 @@
 package com.rag2agent.bootstrap.controller;
 
 import com.rag2agent.bootstrap.service.HybridSearchService;
+import com.rag2agent.bootstrap.service.KnowledgeBaseService;
+import cn.dev33.satoken.stp.StpUtil;
 import com.rag2agent.framework.common.ApiResponse;
 import com.rag2agent.framework.common.ErrorCode;
 import com.rag2agent.framework.exception.BusinessException;
@@ -19,9 +21,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class SearchController {
 
     private final HybridSearchService searchService;
+    private final KnowledgeBaseService knowledgeBaseService;
 
-    public SearchController(HybridSearchService searchService) {
+    public SearchController(HybridSearchService searchService, KnowledgeBaseService knowledgeBaseService) {
         this.searchService = searchService;
+        this.knowledgeBaseService = knowledgeBaseService;
     }
 
     @GetMapping
@@ -33,6 +37,7 @@ public class SearchController {
         if (kbId == null || kbId <= 0) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "kbId 不能为空");
         }
+        knowledgeBaseService.requireOwned(StpUtil.getLoginIdAsLong(), kbId);
         if (query == null || query.isBlank()) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "query 不能为空");
         }
