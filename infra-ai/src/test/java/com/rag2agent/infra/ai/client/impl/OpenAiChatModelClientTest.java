@@ -2,9 +2,11 @@ package com.rag2agent.infra.ai.client.impl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rag2agent.infra.ai.config.AiProviderProperties.Provider;
+import com.rag2agent.infra.ai.exception.AiClientException;
 import com.rag2agent.infra.ai.model.ChatCompletionRequest;
 import com.rag2agent.infra.ai.model.ChatCompletionResponse;
 import com.rag2agent.infra.ai.model.ChatMessage;
@@ -150,5 +152,30 @@ class OpenAiChatModelClientTest {
                 collected::append);
 
         assertEquals("你好", collected.toString());
+    }
+
+    @Test
+    void complete_retriesRateLimitForIdempotentRequest() throws Exception {
+        server.enqueue(new MockResponse().setResponseCode(429).setHeader("Retry-After", "1"));
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}"));
+
+        assertEquals("ok", client.complete(new ChatCompletionRequest(
+                "deepseek", null, List.of(new ChatMessage("user", "hi")), Map.of())).content());
+        assertEquals(2, server.getRequestCount());
+    }
+
+    @Test
+    void complete_classifiesUpstreamFailureAfterBoundedRetries() {
+        for (int i = 0; i < 3; i++) {
+            server.enqueue(new MockResponse().setResponseCode(503).setBody("busy"));
+        }
+
+        AiClientException exception = assertThrows(AiClientException.class, () -> client.complete(
+                new ChatCompletionRequest(
+                        "deepseek", null, List.of(new ChatMessage("user", "hi")), Map.of())));
+        assertEquals(AiClientException.Kind.UPSTREAM_ERROR, exception.kind());
+        assertEquals(3, server.getRequestCount());
     }
 }

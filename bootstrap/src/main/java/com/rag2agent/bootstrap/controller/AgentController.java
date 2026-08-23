@@ -8,6 +8,7 @@ import com.rag2agent.bootstrap.agent.AgentRunService;
 import com.rag2agent.bootstrap.dto.AgentDtos.ApprovalRequest;
 import com.rag2agent.bootstrap.dto.AgentDtos.ChatRequest;
 import com.rag2agent.framework.common.ApiResponse;
+import com.rag2agent.infra.ai.exception.AiClientException;
 import jakarta.validation.Valid;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -68,7 +69,13 @@ public class AgentController {
                     event -> sendEvent(writer, event));
         } catch (Exception e) {
             // 响应可能已部分提交，只能以 SSE 事件形式返回错误
-            sendEvent(writer, new AgentEvent("error", e.getMessage()));
+            if (e instanceof AiClientException aiException) {
+                sendEvent(writer, new AgentEvent("error", Map.of(
+                        "code", aiException.kind() == AiClientException.Kind.RATE_LIMITED ? "429" : "502",
+                        "message", aiErrorMessage(aiException))));
+            } else {
+                sendEvent(writer, new AgentEvent("error", "请求执行失败"));
+            }
         }
         writer.flush();
     }
@@ -88,5 +95,14 @@ public class AgentController {
         } catch (Exception ignored) {
             // 客户端断开时忽略，避免影响主流程
         }
+    }
+
+    private String aiErrorMessage(AiClientException exception) {
+        return switch (exception.kind()) {
+            case TIMEOUT -> "模型服务响应超时，请稍后重试";
+            case RATE_LIMITED -> "模型服务限流，请稍后重试";
+            case UPSTREAM_ERROR -> "模型服务暂时不可用，请稍后重试";
+            case CLIENT_ERROR -> "模型请求参数无效";
+        };
     }
 }

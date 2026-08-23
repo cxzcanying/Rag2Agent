@@ -6,6 +6,7 @@ public enum ErrorCode {
     UNAUTHORIZED("401", "unauthorized"),
     FORBIDDEN("403", "forbidden"),
     NOT_FOUND("404", "not found"),
+    RATE_LIMITED("429", "too many requests"),
     INTERNAL_ERROR("500", "internal server error");
 
     private final String code;

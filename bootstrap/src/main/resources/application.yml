@@ -62,6 +62,10 @@ sa-token:
   is-log: false
 
 rag2agent:
+  rate-limit:
+    enabled: ${RAG2AGENT_RATE_LIMIT_ENABLED:true}
+    limit: ${RAG2AGENT_RATE_LIMIT:60}
+    window-seconds: ${RAG2AGENT_RATE_LIMIT_WINDOW_SECONDS:60}
   agent:
     context-token-budget: ${RAG2AGENT_CONTEXT_TOKEN_BUDGET:6000}
     max-input-chars: ${RAG2AGENT_MAX_INPUT_CHARS:12000}

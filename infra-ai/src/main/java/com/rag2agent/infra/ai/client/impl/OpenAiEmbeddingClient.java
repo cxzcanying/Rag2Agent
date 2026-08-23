@@ -83,15 +83,7 @@ public class OpenAiEmbeddingClient implements EmbeddingClient {
                 .addHeader("Content-Type", "application/json")
                 .post(RequestBody.create(jsonBody, JSON))
                 .build();
-        Response response = http.newCall(request).execute();
-        if (!response.isSuccessful()) {
-            // 非 2xx：把服务端返回的错误体读出来透传给上层，
-            // 否则只看到状态码，无法定位是 key 无效、限流还是模型名错误
-            String errorBody = response.body() == null ? "" : response.body().string();
-            response.close();
-            throw new AiClientException("Embedding API 错误 " + response.code() + ": " + errorBody);
-        }
-        return response;
+        return AiHttpExecutor.execute(http, request, "Embedding");
     }
 
     private static String trimTrailingSlash(String url) {

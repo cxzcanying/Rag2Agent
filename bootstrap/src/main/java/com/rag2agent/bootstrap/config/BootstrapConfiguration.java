@@ -6,7 +6,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 @Configuration
-@EnableConfigurationProperties({Rag2AgentProperties.class, AgentProperties.class})
+@EnableConfigurationProperties({Rag2AgentProperties.class, AgentProperties.class, RateLimitProperties.class})
 public class BootstrapConfiguration {
 
     /**

@@ -117,13 +117,7 @@ public class OpenAiChatModelClient implements ChatModelClient {
                 .addHeader("Content-Type", "application/json")
                 .post(RequestBody.create(jsonBody, JSON))
                 .build();
-        Response response = http.newCall(request).execute();
-        if (!response.isSuccessful()) {
-            String errorBody = response.body() == null ? "" : response.body().string();
-            response.close();
-            throw new AiClientException("Chat API 错误 " + response.code() + ": " + errorBody);
-        }
-        return response;
+        return AiHttpExecutor.execute(http, request, "Chat");
     }
 
     private String buildBody(ChatCompletionRequest request, boolean stream) {
