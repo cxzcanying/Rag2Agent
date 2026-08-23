@@ -20,6 +20,9 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -40,6 +43,7 @@ public class HybridSearchService {
     private final RerankClient rerankClient;
     private final MeterRegistry meterRegistry;
     private final ObservationRegistry observationRegistry;
+    private final Executor retrievalTaskExecutor;
 
     /**
      * 三个依赖的分工：
@@ -51,12 +55,14 @@ public class HybridSearchService {
             EmbeddingClient embeddingClient,
             RerankClient rerankClient,
             MeterRegistry meterRegistry,
-            ObservationRegistry observationRegistry) {
+            ObservationRegistry observationRegistry,
+            @Qualifier("retrievalTaskExecutor") Executor retrievalTaskExecutor) {
         this.jdbc = jdbc;
         this.embeddingClient = embeddingClient;
         this.rerankClient = rerankClient;
         this.meterRegistry = meterRegistry;
         this.observationRegistry = observationRegistry;
+        this.retrievalTaskExecutor = retrievalTaskExecutor;
     }
 
     public List<RetrievalResult> search(Long kbId, String query, int topK) {
@@ -98,18 +104,23 @@ public class HybridSearchService {
         Route route = Observation.createNotStarted("rag2agent.search.route", observationRegistry)
                 .lowCardinalityKeyValue("strategy", metricStrategy(options))
                 .observe(() -> resolveRoute(options.strategy(), query));
-        // 向量路：只有 KEYWORD 路由才跳过（短词向量化容易语义漂移，直接走关键词更准）
-        List<RetrievalResult> vectorResults = (route != Route.KEYWORD)
-                ? Observation.createNotStarted("rag2agent.search.vector", observationRegistry)
-                        .lowCardinalityKeyValue("route", route.name().toLowerCase(Locale.ROOT))
-                        .observe(() -> vectorSearch(kbId, embedQuery(query), options.candidateTopK()))
-                : List.of();
-        // 关键词路：SEMANTIC 路由跳过（疑问句关键词召回意义不大，省一次 SQL）
-        List<RetrievalResult> keywordResults = (route != Route.SEMANTIC)
-                ? Observation.createNotStarted("rag2agent.search.keyword", observationRegistry)
-                        .lowCardinalityKeyValue("route", route.name().toLowerCase(Locale.ROOT))
-                        .observe(() -> keywordSearch(kbId, query, options.candidateTopK()))
-                : List.of();
+        CompletableFuture<List<RetrievalResult>> vectorFuture = route != Route.KEYWORD
+                ? CompletableFuture.supplyAsync(
+                        () -> Observation.createNotStarted("rag2agent.search.vector", observationRegistry)
+                                .lowCardinalityKeyValue("route", route.name().toLowerCase(Locale.ROOT))
+                                .observe(() -> vectorSearch(kbId, embedQuery(query), options.candidateTopK())),
+                        retrievalTaskExecutor)
+                : CompletableFuture.completedFuture(List.of());
+        CompletableFuture<List<RetrievalResult>> keywordFuture = route != Route.SEMANTIC
+                ? CompletableFuture.supplyAsync(
+                        () -> Observation.createNotStarted("rag2agent.search.keyword", observationRegistry)
+                                .lowCardinalityKeyValue("route", route.name().toLowerCase(Locale.ROOT))
+                                .observe(() -> keywordSearch(kbId, query, options.candidateTopK())),
+                        retrievalTaskExecutor)
+                : CompletableFuture.completedFuture(List.of());
+        // 两路召回互不依赖，受控并行后再统一等待；任一路失败仍按失败传播，避免静默降低召回质量。
+        List<RetrievalResult> vectorResults = vectorFuture.join();
+        List<RetrievalResult> keywordResults = keywordFuture.join();
 
         // RRF 融合两路结果，分数域统一、同名 chunk 去重累加
         int fusedTopK = options.rerankEnabled() ? options.candidateTopK() : options.topK();

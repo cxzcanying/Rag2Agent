@@ -4,6 +4,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.core.task.support.ContextPropagatingTaskDecorator;
 
 @Configuration
 @EnableConfigurationProperties({Rag2AgentProperties.class, AgentProperties.class, RateLimitProperties.class})
@@ -22,6 +23,20 @@ public class BootstrapConfiguration {
         executor.setQueueCapacity(100);
         executor.setThreadNamePrefix("evaluation-");
         executor.setWaitForTasksToCompleteOnShutdown(false);
+        return executor;
+    }
+
+    /** 受控检索并行池，避免向量和关键词召回占用 common pool。 */
+    @Bean(name = "retrievalTaskExecutor")
+    public ThreadPoolTaskExecutor retrievalTaskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(4);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(32);
+        executor.setThreadNamePrefix("retrieval-");
+        executor.setTaskDecorator(new ContextPropagatingTaskDecorator());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(10);
         return executor;
     }
 }
