@@ -16,6 +16,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 /**
  * 把当前 HTTP span 的标识放入 MDC，交给 Spring Boot JSON 日志统一输出。
  * 只记录标识，不把 prompt、文档内容和密钥写入日志。
+ * @author 21311
  */
 @Component
 @Order(Ordered.LOWEST_PRECEDENCE)

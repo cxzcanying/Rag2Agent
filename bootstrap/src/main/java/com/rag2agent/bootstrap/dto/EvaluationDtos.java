@@ -10,6 +10,9 @@ import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.util.List;
 
+/**
+ * @author 21311
+ */
 public final class EvaluationDtos {
 
     private EvaluationDtos() {}

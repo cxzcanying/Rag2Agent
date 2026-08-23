@@ -25,6 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * Agent 对话接口：POST /api/chat 走 SSE 推送结构化事件；审批接口同步返回结果。
+ * @author 21311
  */
 @RestController
 @RequestMapping("/api")
@@ -54,6 +55,7 @@ public class AgentController {
         response.setHeader("Connection", "keep-alive");
         PrintWriter writer = response.getWriter();
         Span currentSpan = tracer.currentSpan();
+        //增加trace事件，返回X-Trace-Id
         String traceId = currentSpan == null ? null : currentSpan.context().traceId();
         if (traceId != null) {
             response.setHeader("X-Trace-Id", traceId);

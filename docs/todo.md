@@ -85,6 +85,9 @@
   - 已增加：`rag2agent.agent.context-token-budget`、`max-input-chars`、`summary-max-chars`、`max-output-tokens` 配置；压缩前后 token、丢弃消息数写入 AgentStep 并暴露 Micrometer 指标。
   - 可行性：高。优先做确定性预算控制，再接可选 LLM 摘要，避免每次请求都增加一次模型调用。
   - 后续演进：继续按“系统提示/最近消息/工具结果/高相关引用”分层优化；当前使用确定性摘要和截断，待成本与质量评测后再决定是否接入可选 LLM 滚动摘要。预算按模型配置，并预留输出 token。
+  - **真实 Token 计数方案**：新增 `TokenCounter` 抽象，按 provider/model 绑定官方或已校准的 tokenizer；请求前用 tokenizer 计算完整消息、tool call 和工具 schema 的 prompt token，不能只计算 `content` 字符数。预算按“模型上下文窗口 - `max-output-tokens` - 工具/协议预留 - 安全余量”推导；tokenizer 不可用时保留当前保守估算，并标记 `estimated=true`。
+  - **实际用量账本**：请求完成后以兼容 API 返回的 `usage.prompt_tokens/completion_tokens/total_tokens` 为最终事实源，补齐流式响应的 usage 解析（供应商支持时使用 `stream_options.include_usage`）；记录 provider、model、tokenizer 版本、估算值/实际值和偏差，供成本配额与监控使用。
+  - **校准验收**：准备包含中文、英文、代码、JSON、长文本和 tool call 的固定消息样本，对比本地 tokenizer 与 provider usage；覆盖消息模板、工具 schema、压缩前后预算和多模型切换。只有校准通过的 tokenizer 才能作为精确计数器，否则降级为保守估算。
   - 验收：确定性压缩单测覆盖预算超限、单条超长输入和 tool 消息配对；真实 provider 400/成本回归仍需启动中间件后执行。
 
 - [ ] **评测任务可靠性与结果对账**

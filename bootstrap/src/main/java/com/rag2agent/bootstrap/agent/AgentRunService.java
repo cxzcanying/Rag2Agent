@@ -48,6 +48,7 @@ import org.springframework.stereotype.Service;
  *
  * 编排：先主动检索（无引用不答）→ function calling 循环（模型决定调工具）→ 高风险工具挂起等审批。
  * 审批挂起时把消息历史存 Redis，审批通过后恢复并继续循环。
+ * @author 21311
  */
 @Service
 public class AgentRunService {
@@ -112,6 +113,15 @@ public class AgentRunService {
         this.documentMapper = documentMapper;
     }
 
+    /**
+     * 使用 Redis session 锁，防止同一会话同时执行多个请求。
+     * @param userId
+     * @param sessionId
+     * @param query
+     * @param kbId
+     * @param onEvent
+     * @return
+     */
     public AgentExecutionResult start(
             Long userId, String sessionId, String query, Long kbId, Consumer<AgentEvent> onEvent) {
         if (userId == null || userId <= 0 || sessionId == null
@@ -130,6 +140,15 @@ public class AgentRunService {
         }
     }
 
+    /**
+     * 集中校验用户、session、输入长度和知识库归属。
+     * @param userId
+     * @param sessionId
+     * @param query
+     * @param kbId
+     * @param onEvent
+     * @return
+     */
     private AgentExecutionResult startLocked(
             Long userId, String sessionId, String query, Long kbId, Consumer<AgentEvent> onEvent) {
         if (userId == null || userId <= 0) {
@@ -179,6 +198,13 @@ public class AgentRunService {
         return executeLoop(run.getId(), run.getUserId(), messages, references, run.getMaxIterations(), onEvent);
     }
 
+    /**
+     * 校验 run 所属用户，并通过数据库 CAS 防止重复审批
+     * @param runId
+     * @param approved
+     * @param onEvent
+     * @return
+     */
     public AgentExecutionResult approve(Long runId, boolean approved, Consumer<AgentEvent> onEvent) {
         if (runId == null || runId <= 0) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "runId 必须为正数");
@@ -241,6 +267,22 @@ public class AgentRunService {
         return executeLoop(runId, run.getUserId(), messages, references, run.getMaxIterations(), onEvent);
     }
 
+    /**
+     * executeLoop() 每轮 LLM 调用前检查上下文 token 估算值。
+     * 超出预算时发送：
+     * - context_compaction.started
+     * - context_compaction.completed
+     *
+     * 压缩后重新保存消息，并记录一个 CONTEXT_COMPACTION Agent 步骤。
+     * LLM 请求增加 max_tokens。
+     * @param runId
+     * @param userId
+     * @param messages
+     * @param references
+     * @param maxIterations
+     * @param onEvent
+     * @return
+     */
     private AgentExecutionResult executeLoop(
             Long runId, Long userId, List<ChatMessage> messages, List<Reference> references,
             int maxIterations, Consumer<AgentEvent> onEvent) {
@@ -286,7 +328,9 @@ public class AgentRunService {
                 return new AgentExecutionResult(runId, "FAILED", null, references, null);
             }
             recordLlmMetric(startMs, "success");
-            recordTokens(response.usage());
+            if (response != null) {
+                recordTokens(response.usage());
+            }
             recordLlmStep(runId, iteration, response, System.currentTimeMillis() - startMs);
 
             if (response.toolCalls() != null && !response.toolCalls().isEmpty()) {

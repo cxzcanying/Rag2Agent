@@ -375,6 +375,21 @@ RocketMQ 是 at-least-once 语义，消息重复投递有三个现实来源：
 
 > 验证时间 2026-08-19。使用 MIRACL 中文 dev（Apache-2.0，固定 revision）和中文 corpus 第 0 分片构造 100 条检索用例、339 篇文档。
 
+### 本项目一次评测的完整过程
+
+评测不是“上传几份文档后调用一个接口”这么简单，而是一条有固定输入、异步任务和数据库结果的流水线。每次实验都必须保持数据集、知识库、检索配置和结果之间可追溯：
+
+1. **固定数据集和实验输入**：下载指定 revision 的原始数据，记录 revision、文件 SHA256、抽样种子和用例/文档数量。`prepare_miracl_zh.py` 根据 topics、qrels 映射出问题和金标文档，并加入干扰文档；`prepare_dureader_robust.py` 从带参考答案的段落生成问题、答案和金标文档。脚本输出 `documents.jsonl`、`cases.external.json`、`manifest.json`，后续生成供系统上传的 PDF。先用 PDFBox 或 `pdfplumber` 抽样提取文本，确认中文、特殊字符和控制字符正常。
+2. **启动并核对运行环境**：启动 PostgreSQL/pgvector/pg_trgm、Redis、MinIO、RocketMQ 以及后端，确认健康检查、端口和数据库评测表已就绪。已有数据库卷需要手动执行 `docker/postgres/init/003_evaluation.sql`；新卷由初始化脚本自动创建。评测脚本先注册或读取专用账号，再登录取得 `satoken`，避免使用个人业务数据和凭证。
+3. **创建或恢复独立知识库**：运行器从 `run-state.json` 读取 `kbId`；没有时创建新的知识库并立即保存。不同数据集、不同切块参数或不同索引版本使用独立知识库，不能在同一知识库中原地覆盖，否则无法判断结果差异来自数据还是配置。
+4. **批量上传并等待索引完成**：逐个调用 `POST /api/documents/upload?kbId={kbId}` 上传 PDF，保存 `externalDocumentId -> documentId` 映射。上传接口只代表任务创建，必须轮询 `GET /api/documents?kbId={kbId}`，直到所有文档为 `INDEXED`；`FAILED` 文档按记录重传或调用 reingest。每次上传、重试和状态变更都写入断点文件，脚本重启时跳过已成功项，避免重复文档和 embedding 费用。
+5. **导入评测用例并完成 ID 映射**：将 `cases.external.json` 中的金标外部文档 ID 替换成上传后得到的内部 `documentId`，调用 `POST /api/evaluations/cases/import` 写入当前知识库。导入前核对用例数量、每题至少一个金标文档（生成评测还要有 `expectedAnswer`），并确认用例没有混入其他知识库。
+6. **提交一个或多个评测运行**：为每组实验固定 `strategy`（`VECTOR`/`KEYWORD`/`AUTO`）、`topK`、`candidateTopK`、`rrfK`、`rerankEnabled` 和 `evaluateGeneration`。单组调用 `POST /api/evaluations/runs`，配置矩阵调用 `/api/evaluations/matrix`；请求带稳定的 `Idempotency-Key`。接口应立即返回 `runId`，后台再执行，网络超时后先查询原 `runId`，不要盲目重新提交。
+7. **后台逐题执行并持久化**：每道题先按配置路由检索，向量/关键词结果经过候选截取、RRF 融合和可选 Rerank，依据金标文档计算首个相关排名。开启 `evaluateGeneration` 时，再把检索上下文交给回答模型生成答案，并交给裁判模型计算 Faithfulness 和 Answer Correctness。每题结果写入 `eval_case_result`，运行进度和聚合指标写入 `eval_run`；单题错误必须保留错误信息，不得用整批 HTTP 失败掩盖。
+8. **轮询运行状态并处理终态**：按 `runId` 调用 `GET /api/evaluations/runs/{runId}`，观察 `status`、`completedCases`、`totalCases` 和错误信息，直到 `COMPLETED`、`COMPLETED_WITH_ERRORS` 或 `FAILED`。评测任务可能跨越客户端超时或应用重启，恢复时继续查询数据库中的运行，不以某个脚本进程是否存活作为完成依据。
+9. **对账、统计和解释结果**：终态后以 `eval_run` / `eval_case_result` 为事实源，核对总用例数、成功数、失败数和逐题排名，再报告 Hit@5、MRR；只有开启生成评测且结果完整时才报告 Faithfulness、Answer Correctness。比较实验时保持同一数据集、知识库文档集合和用例顺序，只改变一个待验证配置，并同时记录 runId、配置、数据集 revision 和脚本 manifest。
+10. **保存可复现实验凭证**：最终报告至少包含数据集版本和 SHA256、知识库 ID、文档/用例数、每个 Run ID、完整配置、终态、指标、失败用例和运行时间。`run-state.json` 只用于上传断点和脚本恢复，不能替代数据库结果，也不能单独作为“评测已完成”的证据。
+
 ### 坑 1：公开语料的 NUL 控制字符会击穿 PostgreSQL 入库
 
 现象：339 篇 PDF 全部上传成功，但部分异步任务 FAILED。`ingest_task.error_message` 报：
@@ -425,6 +440,18 @@ INSERT INTO document_chunk ...
 处理：先查询已有 `runId` 的状态再决定是否重试，不能因为客户端 timeout 就重复提交同一批评测，避免重复消耗模型额度和产生重复运行记录。
 
 后续方案：将评测提交改为异步任务，立即返回 `runId`，补充状态/进度查询接口；前端和脚本采用轮询或 SSE 获取进度，并允许显式取消。短期运行脚本应使用足够长的读取超时。
+
+#### 为什么评测任务必须从同步改为异步
+
+这不是单纯把客户端超时调大，而是要把 HTTP 请求生命周期与评测任务生命周期解耦：
+
+1. **评测耗时不可由接口稳定上界控制**：检索、回答模型和裁判模型的耗时会随用例数量、模型排队、429 重试和网络抖动变化。同步接口把整批任务绑定在一个 HTTP 连接上，客户端、网关或代理任一处超时，都会让调用方误以为任务失败。
+2. **客户端断开不会可靠取消服务端工作**：请求超时后，服务端线程可能仍在调用模型并写入 `eval_case_result`。客户端若立即重试，同一批用例可能产生重复运行、重复模型费用和重复副作用。
+3. **异步接口可以提供可恢复的状态机**：提交只负责创建或复用 `eval_run` 并返回 `runId`；后台任务负责逐题执行、持久化结果和更新 `QUEUED/RUNNING/COMPLETED/FAILED/CANCELLED` 状态。进程重启后可从数据库恢复未完成运行，而不是依赖原始 HTTP 连接。
+4. **进度和错误可以被准确表达**：调用方可以按 `runId` 查询 `totalCases/completedCases`、失败原因和最终指标；单题失败可记录在 `eval_case_result.error_message`，不必把整批任务粗暴归类成 HTTP 500。
+5. **幂等边界更清晰**：提交请求使用 `Idempotency-Key` 或客户端请求 ID，数据库中的 `eval_run` 是全局事实源；网络重试只复用已有运行，不重新消耗模型额度。
+
+异步化并不意味着“后台丢任务”。最低验收要求是：提交接口在短时间内返回 `runId`；任务状态和逐题结果持久化到数据库；服务重启后能够恢复 `QUEUED/RUNNING` 运行；相同幂等键不会创建第二个 `eval_run`；前端或脚本通过轮询/SSE 等方式等待终态。`run-state.json` 只能做脚本断点辅助，不能替代 `eval_run` / `eval_case_result`。
 
 ### 坑 6：评测运行状态文件不能作为数据库事实来源
 

@@ -28,6 +28,7 @@ logs/
 .npm-cache/
 eval-data/
 .eval-tools/
+docs/Spec/
 __pycache__/
 *.py[cod]
 

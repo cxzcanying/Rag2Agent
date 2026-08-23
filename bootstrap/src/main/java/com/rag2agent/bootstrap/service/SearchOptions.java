@@ -1,5 +1,8 @@
 package com.rag2agent.bootstrap.service;
 
+/**
+ * @author 21311
+ */
 public record SearchOptions(
         Strategy strategy,
         int topK,
