@@ -158,8 +158,9 @@
 
 ### P1 缓存、并发与成本
 
-- [ ] **多级缓存**
-  - 当前：Redis 只用于 Agent 审批上下文；没有 Caffeine L1、语义缓存、Embedding 查询缓存，也没有命中率指标。
+- [ ] **多级缓存**（查询 Embedding 两级缓存已落地）
+  - 当前：已增加 Caffeine L1 + Redis L2 查询 Embedding 缓存，key 包含 provider/model/规范化查询摘要，缓存命中/未命中/错误写入 Micrometer；缓存依赖故障透明回源。
+  - 未完成：热门检索结果和只读工具结果尚未缓存；Embedding 缓存尚未接入 single-flight，冷启动并发相同查询仍可能重复调用 provider；写入/版本切换主动失效策略待补。
   - 方案：Caffeine L1 + Redis L2；缓存 key 至少包含 provider、model、版本、规范化文本和维度；优先缓存查询 embedding、热门检索结果和只读工具结果，写入/版本切换主动失效；不缓存带权限差异的裸文档结果。
   - 验收：命中/未命中可观测，权限和文档版本不会串缓存。
 

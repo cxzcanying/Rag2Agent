@@ -44,6 +44,7 @@ public class HybridSearchService {
     private final MeterRegistry meterRegistry;
     private final ObservationRegistry observationRegistry;
     private final Executor retrievalTaskExecutor;
+    private final QueryEmbeddingCache queryEmbeddingCache;
 
     /**
      * 三个依赖的分工：
@@ -56,13 +57,15 @@ public class HybridSearchService {
             RerankClient rerankClient,
             MeterRegistry meterRegistry,
             ObservationRegistry observationRegistry,
-            @Qualifier("retrievalTaskExecutor") Executor retrievalTaskExecutor) {
+            @Qualifier("retrievalTaskExecutor") Executor retrievalTaskExecutor,
+            QueryEmbeddingCache queryEmbeddingCache) {
         this.jdbc = jdbc;
         this.embeddingClient = embeddingClient;
         this.rerankClient = rerankClient;
         this.meterRegistry = meterRegistry;
         this.observationRegistry = observationRegistry;
         this.retrievalTaskExecutor = retrievalTaskExecutor;
+        this.queryEmbeddingCache = queryEmbeddingCache;
     }
 
     public List<RetrievalResult> search(Long kbId, String query, int topK) {
@@ -162,16 +165,18 @@ public class HybridSearchService {
      * model 传 null 表示走 provider 配置里的默认模型（BAAI/bge-m3）。
      */
     private List<Float> embedQuery(String query) {
-        EmbeddingResponse response = Observation.createNotStarted(
-                        "rag2agent.search.embedding", observationRegistry)
-                .lowCardinalityKeyValue("provider", "siliconflow")
-                .observe(() -> embeddingClient.embed(new EmbeddingRequest(
-                        "siliconflow", null, List.of(query))));
-        // 向量化失败宁可抛异常，也不返回空结果让上层误以为"没查到"
-        if (response.vectors().isEmpty()) {
-            throw new IllegalStateException("查询向量化返回为空");
-        }
-        return response.vectors().getFirst();
+        return queryEmbeddingCache.getOrCompute("siliconflow", null, query, () -> {
+            EmbeddingResponse response = Observation.createNotStarted(
+                            "rag2agent.search.embedding", observationRegistry)
+                    .lowCardinalityKeyValue("provider", "siliconflow")
+                    .observe(() -> embeddingClient.embed(new EmbeddingRequest(
+                            "siliconflow", null, List.of(query))));
+            // 向量化失败宁可抛异常，也不返回空结果让上层误以为"没查到"
+            if (response.vectors().isEmpty()) {
+                throw new IllegalStateException("查询向量化返回为空");
+            }
+            return response.vectors().getFirst();
+        });
     }
 
     /**

@@ -62,6 +62,11 @@ sa-token:
   is-log: false
 
 rag2agent:
+  cache:
+    embedding:
+      enabled: ${RAG2AGENT_EMBEDDING_CACHE_ENABLED:true}
+      max-entries: ${RAG2AGENT_EMBEDDING_CACHE_MAX_ENTRIES:10000}
+      ttl-seconds: ${RAG2AGENT_EMBEDDING_CACHE_TTL_SECONDS:3600}
   rate-limit:
     enabled: ${RAG2AGENT_RATE_LIMIT_ENABLED:true}
     limit: ${RAG2AGENT_RATE_LIMIT:60}

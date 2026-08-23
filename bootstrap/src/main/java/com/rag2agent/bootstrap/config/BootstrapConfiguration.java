@@ -7,7 +7,12 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.core.task.support.ContextPropagatingTaskDecorator;
 
 @Configuration
-@EnableConfigurationProperties({Rag2AgentProperties.class, AgentProperties.class, RateLimitProperties.class})
+@EnableConfigurationProperties({
+    Rag2AgentProperties.class,
+    AgentProperties.class,
+    RateLimitProperties.class,
+    EmbeddingCacheProperties.class
+})
 public class BootstrapConfiguration {
 
     /**
