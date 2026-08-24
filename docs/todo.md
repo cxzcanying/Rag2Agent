@@ -97,23 +97,24 @@
 
 ### P0 可观测性
 
-- [ ] **RAG 全链路追踪与结构化日志**（部分已有）
-  - 当前：已有 Micrometer、OTel tracing bridge、JSON 日志；检索已补齐 route/embedding/vector/keyword/RRF/rerank 子 span，Agent 保留 LLM/tool span，MQ producer/consumer 已有 Observation，消息携带 traceId；SSE/前端显示诊断 ID。
+- [ ] **RAG 全链路追踪与结构化日志**（HTTP/AI/MQ 基础链路已落地）
+  - 当前：已有 Micrometer、OTel tracing bridge、JSON 日志；检索已补齐 route/embedding/vector/keyword/RRF/rerank 子 span，Agent 保留 LLM/tool span，MQ producer/consumer 已有 Observation，消息携带标准 trace context；SSE/前端显示诊断 ID。
   - 方案：采用成熟组合 Micrometer Observation + OpenTelemetry OTLP + Jaeger；为 route、embedding、vector、keyword、RRF、rerank、LLM、tool、MQ consumer 建子 span。JSON 日志统一输出 `traceId/spanId/runId/kbId/userId/provider/model/latencyMs/candidateCount/resultCount/outcome`，严禁输出 prompt、密钥和完整文档内容。
   - 当前证据：`/api/health` 已在 Jaeger 查询到 `rag2agent` HTTP span；RocketMQ broker 已在高位端口健康运行。
-  - 未完成：MQ 消费端目前以消息属性携带 traceId 并建立独立 span，尚未完成跨进程 parent span 关联；完整 Agent 请求与数据库 run/step 的统一字段验收待后续补齐。
+  - 当前补充：RocketMQ producer/consumer 已通过 W3C `traceparent`/`tracestate` user properties 注入/提取，消费 span 在 parent context 下创建；指标不再使用高基数 traceId 标签。
+  - 未完成：完整 Agent 请求与数据库 run/step 的统一字段验收、真实 Jaeger producer→consumer 父子链路验收仍待补齐。
 
-- [ ] **业务指标补全**（部分已有）
-  - 当前：已有检索耗时、结果数、LLM 耗时、Token、Agent transition 指标；没有缓存命中率、provider 限流/重试/熔断、上下文压缩、队列积压等指标。
+- [ ] **业务指标补全**（核心指标已落地）
+  - 当前：已有检索耗时、结果数、LLM 耗时、Token、Agent transition、Embedding L1/L2 缓存、AI retry/upstream/circuit/bulkhead、API 限流和检索超时指标；仍缺队列积压、真实 provider/model 维度的 Token 成本账本。
   - 方案：Micrometer 统一命名和低基数标签，补充 `cache.hit/miss`、`search.phase.duration`、`ai.request/retry/limit`、`context.tokens`、`mq.lag`；Prometheus 采集，Grafana/Jaeger 作为展示面。
   - 验收：能按 provider、模型、路由、结果状态查看 QPS、P50/P95/P99、错误率、Token 和缓存命中率。
 
 ### P1 可靠性与安全边界
 
-- [ ] **API 限流、超时、重试、熔断和降级**（限流/错误分类/基础重试已落地）
-  - 当前：已增加 Redis 用户固定窗口限流（默认 60 次/分钟），限流返回统一 JSON 429 和 `Retry-After`；AI Chat/Embedding/Rerank 的无副作用请求对 429/5xx/网络超时做最多 3 次有限重试，并将错误分类为 timeout/429/5xx/客户端错误。工具调用未接入自动重试。
-  - 未完成：尚无熔断器、指数退避、provider 级并发舱壁和检索/生成降级；Redis 限流窗口在进程于首次 increment 后立即崩溃时可能没有设置 TTL；SSE 已输出部分内容后断连不能安全重试。
-  - 方案：外部模型调用接 Resilience4j 或等价轻量熔断器：连接错误/429/5xx 仅对幂等请求指数退避重试，写操作和工具副作用禁止盲目重试；连续失败触发熔断；检索降级为向量或关键词单路，生成降级为“仅返回引用/暂时无法生成”。统一 `ApiResponse` 错误码和 `Retry-After`。
+- [ ] **API 限流、超时、重试、熔断和降级**（核心策略已落地）
+  - 当前：Redis 用户固定窗口限流、统一 429/503 错误和 `Retry-After` 已落地；AI Chat/Embedding/Rerank 对 429/5xx/网络超时做最多 3 次指数退避+抖动重试，具备失败阈值熔断、半开探测和 provider 客户端并发舱壁；检索支持总超时单路降级，生成在已有引用时降级为“仅返回引用”。工具副作用未接入自动重试。
+  - 未完成：熔断/重试策略尚未按 provider 动态刷新；Redis 限流窗口在首次 increment 后进程崩溃仍可能没有 TTL；SSE 已输出部分内容后的断连重连协议待补。
+  - 方案：保留轻量执行器作为默认实现；待多 provider、跨实例熔断状态和配置热刷新需求明确后，再评估 Resilience4j/Caffeine 等成熟组件，而不是仅为堆依赖引入。
   - 验收：429、超时、熔断、恢复各有集成测试；客户端收到稳定 JSON，不出现 HTML 或空响应。
 
 - [ ] **输入防御与成本配额**
@@ -122,7 +123,7 @@
   - 验收：超长输入、控制字符、提示注入样例和高频请求均优雅拒绝或降级，不泄露系统提示和密钥。
 
 - [ ] **AI 可靠性指标与配置化策略**
-  - 当前残留风险：基础重试使用固定次数和固定退避，尚未暴露 retry、upstream status、熔断状态和限流放行/拒绝的 Micrometer 指标；重试参数不能按 provider/model 动态调整。
+  - 当前残留风险：已暴露 AI success/retry/timeout/upstream/rate-limit/circuit/bulkhead 和限流放行/拒绝指标；重试参数可由 YAML/环境变量配置，但尚未按 provider/model 动态刷新，且指标当前按客户端 operation 而非完整 provider/model 维度展开。
   - 方案：统一 `ai.request`、`ai.retry`、`ai.circuit`、`api.rate_limit` 指标，标签限制为 provider/model/operation/outcome；将 attempts、backoff、超时、熔断阈值纳入配置并支持运行时刷新。
 
 - [ ] **端到端幂等性**
@@ -135,9 +136,9 @@
   - 当前残留风险：入库锁 TTL 为 2 小时，Agent session 锁 TTL 为 30 分钟；若模型或 embedding 链路超过 TTL，锁可能自动过期，导致第二个请求重新进入并发执行。
   - 方案：为长任务增加 watchdog/租约续期，续期脚本必须校验 token；任务结束仍使用 compare-and-delete 释放，避免误删其他请求的锁。
 
-- [ ] **RocketMQ 跨进程 parent span 传播**
-  - 当前残留风险：消息属性已携带业务 `traceId`，消费端也建立了独立 Observation，但尚未使用标准 OpenTelemetry `traceparent` 注入/提取，因此 Jaeger 中 producer 与 consumer 可能不是同一条父子链路。
-  - 方案：使用 `TextMapPropagator` 将 `traceparent/tracestate` 写入 RocketMQ user properties，消费端提取后创建带 parent context 的 consumer span，并增加 Jaeger 链路验收测试。
+- [ ] **RocketMQ 跨进程 parent span 传播**（标准传播已落地）
+  - 当前：已使用 OpenTelemetry W3C propagator 将 `traceparent/tracestate` 写入 RocketMQ user properties，消费端提取后在 parent context 下创建 Observation；仍需真实发送消息并在 Jaeger 验收 producer→consumer 父子关系。
+  - 方案：保留标准 `TextMapPropagator` 注入/提取，增加带 broker 的集成验收，禁止退回仅传裸 `traceId`。
 
 ### P1 可插拔与动态配置
 

@@ -12,6 +12,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Duration;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -22,12 +23,17 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
     private final RateLimitProperties properties;
+    private final MeterRegistry meterRegistry;
 
     public ApiRateLimitFilter(
-            StringRedisTemplate redis, ObjectMapper objectMapper, RateLimitProperties properties) {
+            StringRedisTemplate redis,
+            ObjectMapper objectMapper,
+            RateLimitProperties properties,
+            MeterRegistry meterRegistry) {
         this.redis = redis;
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.meterRegistry = meterRegistry;
     }
 
     @Override
@@ -46,6 +52,7 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
             }
             if (count != null && count > properties.getLimit()) {
                 response.setStatus(429);
+                meterRegistry.counter("rag2agent.api.rate_limit", "outcome", "rejected").increment();
                 response.setHeader("Retry-After", String.valueOf(properties.getWindowSeconds()));
                 response.setContentType("application/json");
                 response.setCharacterEncoding("UTF-8");
@@ -55,7 +62,9 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
             }
         } catch (RuntimeException ignored) {
             // 限流依赖不可用时不阻断主业务，监控应通过 Redis 健康指标发现问题。
+            meterRegistry.counter("rag2agent.api.rate_limit", "outcome", "dependency_error").increment();
         }
+        meterRegistry.counter("rag2agent.api.rate_limit", "outcome", "allowed").increment();
         filterChain.doFilter(request, response);
     }
 

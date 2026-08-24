@@ -316,6 +316,9 @@ public class AgentRunService {
             try {
                 response = Observation.createNotStarted("rag2agent.agent.llm", observationRegistry)
                         .highCardinalityKeyValue("run.id", String.valueOf(runId))
+                        .lowCardinalityKeyValue("operation", "chat")
+                        .lowCardinalityKeyValue("provider", "deepseek")
+                        .lowCardinalityKeyValue("model", "configured")
                         .observe(() -> chatClient.complete(new ChatCompletionRequest(
                                 "deepseek", null, requestMessages,
                                 Map.of("max_tokens", agentProperties.getMaxOutputTokens()),

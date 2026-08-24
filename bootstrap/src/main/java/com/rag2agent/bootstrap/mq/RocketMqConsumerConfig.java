@@ -5,6 +5,9 @@ import com.rag2agent.bootstrap.service.IngestPipelineService;
 import java.nio.charset.StandardCharsets;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
+import com.rag2agent.bootstrap.observability.MqTracePropagation;
 import org.apache.rocketmq.client.consumer.DefaultMQPushConsumer;
 import org.apache.rocketmq.client.consumer.listener.ConsumeConcurrentlyStatus;
 import org.apache.rocketmq.client.consumer.listener.MessageListenerConcurrently;
@@ -44,8 +47,11 @@ public class RocketMqConsumerConfig {
                     Observation observation = Observation.createNotStarted(
                                     "rag2agent.mq.consumer", observationRegistry)
                             .lowCardinalityKeyValue("topic", message.getTopic())
-                            .highCardinalityKeyValue("messaging.trace_id", traceId == null ? "" : traceId);
-                    observation.observe(() -> pipelineService.process(documentId, taskMessage.taskId()));
+                            .lowCardinalityKeyValue("messaging.system", "rocketmq");
+                    Context parent = MqTracePropagation.extract(message);
+                    try (Scope ignored = parent.makeCurrent()) {
+                        observation.observe(() -> pipelineService.process(documentId, taskMessage.taskId()));
+                    }
                     log.info("入库任务消费完成: documentId={}, traceId={}", documentId, traceId);
                 } catch (Exception e) {
                     log.error("入库消费失败，稍后重试: documentId={}, traceId={}",

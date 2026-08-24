@@ -11,6 +11,7 @@ import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
+import com.rag2agent.bootstrap.observability.MqTracePropagation;
 import org.apache.rocketmq.client.producer.DefaultMQProducer;
 import org.apache.rocketmq.common.message.Message;
 import org.slf4j.Logger;
@@ -59,6 +60,7 @@ public class IngestMessageService {
                         if (!traceId.isBlank()) {
                             message.putUserProperty("traceId", traceId);
                         }
+                        MqTracePropagation.inject(message);
                         try {
                             producer.send(message);
                         } catch (Exception e) {
