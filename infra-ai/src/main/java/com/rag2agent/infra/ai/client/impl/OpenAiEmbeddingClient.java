@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.rag2agent.infra.ai.client.EmbeddingClient;
 import com.rag2agent.infra.ai.config.AiProviderProperties.Provider;
+import com.rag2agent.infra.ai.config.AiResilienceProperties;
 import com.rag2agent.infra.ai.exception.AiClientException;
 import com.rag2agent.infra.ai.model.EmbeddingRequest;
 import com.rag2agent.infra.ai.model.EmbeddingResponse;
@@ -13,6 +14,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Metrics;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -34,11 +37,18 @@ public class OpenAiEmbeddingClient implements EmbeddingClient {
     private final String baseUrl;
     private final String apiKey;
     private final String defaultModel;
+    private final AiHttpExecutor executor;
 
     public OpenAiEmbeddingClient(Provider provider) {
+        this(provider, new AiResilienceProperties(), Metrics.globalRegistry);
+    }
+
+    public OpenAiEmbeddingClient(
+            Provider provider, AiResilienceProperties resilience, MeterRegistry meterRegistry) {
         this.baseUrl = trimTrailingSlash(provider.getBaseUrl());
         this.apiKey = provider.getApiKey();
         this.defaultModel = provider.getEmbeddingModel();
+        this.executor = new AiHttpExecutor(resilience, meterRegistry);
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 //embedding 生成比 chat 快，60 秒足够，不用 90 秒
@@ -83,7 +93,7 @@ public class OpenAiEmbeddingClient implements EmbeddingClient {
                 .addHeader("Content-Type", "application/json")
                 .post(RequestBody.create(jsonBody, JSON))
                 .build();
-        return AiHttpExecutor.execute(http, request, "Embedding");
+        return executor.execute(http, request, "Embedding");
     }
 
     private static String trimTrailingSlash(String url) {

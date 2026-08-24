@@ -6,7 +6,9 @@ public class AiClientException extends RuntimeException {
         TIMEOUT,
         RATE_LIMITED,
         UPSTREAM_ERROR,
-        CLIENT_ERROR
+        CLIENT_ERROR,
+        CIRCUIT_OPEN,
+        BULKHEAD_REJECTED
     }
 
     private final Kind kind;

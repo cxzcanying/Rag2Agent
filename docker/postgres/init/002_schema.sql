@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS ingest_task (
 );
 
 -- Agent 执行状态机：INIT -> ROUTING -> EXECUTING -> WAITING_APPROVAL -> FINALIZING
---              -> COMPLETED / FAILED / CANCELLED
+--              -> COMPLETED / DEGRADED / FAILED / CANCELLED
 CREATE TABLE IF NOT EXISTS agent_run (
     id             BIGSERIAL PRIMARY KEY,
     session_id     VARCHAR(64) NOT NULL,

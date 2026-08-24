@@ -103,6 +103,8 @@ public class AgentController {
             case RATE_LIMITED -> "模型服务限流，请稍后重试";
             case UPSTREAM_ERROR -> "模型服务暂时不可用，请稍后重试";
             case CLIENT_ERROR -> "模型请求参数无效";
+            case CIRCUIT_OPEN -> "模型服务熔断中，请稍后重试";
+            case BULKHEAD_REJECTED -> "模型并发已达上限，请稍后重试";
         };
     }
 }

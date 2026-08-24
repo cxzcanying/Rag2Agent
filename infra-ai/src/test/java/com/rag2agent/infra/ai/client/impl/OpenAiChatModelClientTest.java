@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rag2agent.infra.ai.config.AiProviderProperties.Provider;
+import com.rag2agent.infra.ai.config.AiResilienceProperties;
 import com.rag2agent.infra.ai.exception.AiClientException;
 import com.rag2agent.infra.ai.model.ChatCompletionRequest;
 import com.rag2agent.infra.ai.model.ChatCompletionResponse;
@@ -19,6 +20,7 @@ import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 class OpenAiChatModelClientTest {
 
@@ -177,5 +179,35 @@ class OpenAiChatModelClientTest {
                         "deepseek", null, List.of(new ChatMessage("user", "hi")), Map.of())));
         assertEquals(AiClientException.Kind.UPSTREAM_ERROR, exception.kind());
         assertEquals(3, server.getRequestCount());
+    }
+
+    @Test
+    void complete_opensCircuitAfterConfiguredFailures() {
+        AiResilienceProperties properties = new AiResilienceProperties();
+        properties.setFailureThreshold(2);
+        properties.setMaxAttempts(3);
+        properties.setInitialBackoffMillis(0);
+        properties.setMaxBackoffMillis(0);
+        client = new OpenAiChatModelClient(provider(), properties, new SimpleMeterRegistry());
+        server.enqueue(new MockResponse().setResponseCode(503));
+        server.enqueue(new MockResponse().setResponseCode(503));
+
+        assertThrows(AiClientException.class, () -> client.complete(request()));
+        AiClientException open = assertThrows(AiClientException.class, () -> client.complete(request()));
+        assertEquals(AiClientException.Kind.CIRCUIT_OPEN, open.kind());
+        assertEquals(2, server.getRequestCount());
+    }
+
+    private Provider provider() {
+        Provider provider = new Provider();
+        provider.setBaseUrl(server.url("/").toString());
+        provider.setApiKey("test-key");
+        provider.setChatModel("test-chat-model");
+        return provider;
+    }
+
+    private ChatCompletionRequest request() {
+        return new ChatCompletionRequest(
+                "deepseek", null, List.of(new ChatMessage("user", "hi")), Map.of());
     }
 }

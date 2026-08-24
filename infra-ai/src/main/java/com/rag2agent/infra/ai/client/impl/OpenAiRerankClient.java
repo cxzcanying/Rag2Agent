@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.rag2agent.infra.ai.client.RerankClient;
 import com.rag2agent.infra.ai.config.AiProviderProperties.Provider;
+import com.rag2agent.infra.ai.config.AiResilienceProperties;
 import com.rag2agent.infra.ai.exception.AiClientException;
 import com.rag2agent.infra.ai.model.RerankRequest;
 import com.rag2agent.infra.ai.model.RerankResponse;
@@ -14,6 +15,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Metrics;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -33,11 +36,18 @@ public class OpenAiRerankClient implements RerankClient {
     private final String baseUrl;
     private final String apiKey;
     private final String defaultModel;
+    private final AiHttpExecutor executor;
 
     public OpenAiRerankClient(Provider provider) {
+        this(provider, new AiResilienceProperties(), Metrics.globalRegistry);
+    }
+
+    public OpenAiRerankClient(
+            Provider provider, AiResilienceProperties resilience, MeterRegistry meterRegistry) {
         this.baseUrl = trimTrailingSlash(provider.getBaseUrl());
         this.apiKey = provider.getApiKey();
         this.defaultModel = provider.getRerankModel();
+        this.executor = new AiHttpExecutor(resilience, meterRegistry);
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
@@ -80,7 +90,7 @@ public class OpenAiRerankClient implements RerankClient {
                 .addHeader("Content-Type", "application/json")
                 .post(RequestBody.create(jsonBody, JSON))
                 .build();
-        return AiHttpExecutor.execute(http, request, "Rerank");
+        return executor.execute(http, request, "Rerank");
     }
 
     /**

@@ -20,6 +20,7 @@ import com.rag2agent.bootstrap.tool.ToolRegistry;
 import com.rag2agent.framework.common.ErrorCode;
 import com.rag2agent.framework.exception.BusinessException;
 import com.rag2agent.infra.ai.client.ChatModelClient;
+import com.rag2agent.infra.ai.exception.AiClientException;
 import com.rag2agent.infra.ai.model.ChatCompletionRequest;
 import com.rag2agent.infra.ai.model.ChatCompletionResponse;
 import com.rag2agent.infra.ai.model.ChatMessage;
@@ -322,9 +323,17 @@ public class AgentRunService {
             } catch (Exception e) {
                 recordLlmMetric(startMs, "error");
                 log.error("Agent LLM 调用失败: runId={}", runId, e);
+                if (e instanceof AiClientException && !references.isEmpty()) {
+                    String answer = "模型服务暂不可用，以下是本次检索到的参考资料。请稍后重试生成答案。";
+                    updateStatus(runId, "DEGRADED");
+                    recordAgentTransition("degraded");
+                    onEvent.accept(new AgentEvent("done", Map.of(
+                            "answer", answer, "references", references, "degraded", true)));
+                    return new AgentExecutionResult(runId, "DEGRADED", answer, references, null);
+                }
                 updateStatus(runId, "FAILED");
                 recordAgentTransition("failed");
-                onEvent.accept(new AgentEvent("error", e.getMessage()));
+                onEvent.accept(new AgentEvent("error", safeAiError(e)));
                 return new AgentExecutionResult(runId, "FAILED", null, references, null);
             }
             recordLlmMetric(startMs, "success");
@@ -579,5 +588,19 @@ public class AgentRunService {
                 .tag("status", status)
                 .register(meterRegistry)
                 .increment();
+    }
+
+    private String safeAiError(Exception exception) {
+        if (exception instanceof AiClientException aiException) {
+            return switch (aiException.kind()) {
+                case TIMEOUT -> "模型服务响应超时，请稍后重试";
+                case RATE_LIMITED -> "模型服务限流，请稍后重试";
+                case UPSTREAM_ERROR -> "模型服务暂时不可用，请稍后重试";
+                case CIRCUIT_OPEN -> "模型服务熔断中，请稍后重试";
+                case BULKHEAD_REJECTED -> "模型并发已达上限，请稍后重试";
+                case CLIENT_ERROR -> "模型请求参数无效";
+            };
+        }
+        return "Agent 执行失败，请稍后重试";
     }
 }

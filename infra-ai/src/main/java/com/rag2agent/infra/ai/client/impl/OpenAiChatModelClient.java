@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.rag2agent.infra.ai.client.ChatModelClient;
 import com.rag2agent.infra.ai.config.AiProviderProperties.Provider;
+import com.rag2agent.infra.ai.config.AiResilienceProperties;
 import com.rag2agent.infra.ai.exception.AiClientException;
 import com.rag2agent.infra.ai.model.ChatCompletionRequest;
 import com.rag2agent.infra.ai.model.ChatCompletionResponse;
@@ -22,6 +23,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.concurrent.TimeUnit;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Metrics;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -42,11 +45,18 @@ public class OpenAiChatModelClient implements ChatModelClient {
     private final String baseUrl;
     private final String apiKey;
     private final String defaultModel;
+    private final AiHttpExecutor executor;
 
     public OpenAiChatModelClient(Provider provider) {
+        this(provider, new AiResilienceProperties(), Metrics.globalRegistry);
+    }
+
+    public OpenAiChatModelClient(
+            Provider provider, AiResilienceProperties resilience, MeterRegistry meterRegistry) {
         this.baseUrl = trimTrailingSlash(provider.getBaseUrl());
         this.apiKey = provider.getApiKey();
         this.defaultModel = provider.getChatModel();
+        this.executor = new AiHttpExecutor(resilience, meterRegistry);
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(90, TimeUnit.SECONDS)
@@ -117,7 +127,7 @@ public class OpenAiChatModelClient implements ChatModelClient {
                 .addHeader("Content-Type", "application/json")
                 .post(RequestBody.create(jsonBody, JSON))
                 .build();
-        return AiHttpExecutor.execute(http, request, "Chat");
+        return executor.execute(http, request, "Chat");
     }
 
     private String buildBody(ChatCompletionRequest request, boolean stream) {

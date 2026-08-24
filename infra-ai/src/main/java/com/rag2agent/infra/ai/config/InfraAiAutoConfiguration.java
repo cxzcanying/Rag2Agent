@@ -11,24 +11,29 @@ import java.util.List;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import io.micrometer.core.instrument.MeterRegistry;
 
 @Configuration
-@EnableConfigurationProperties(AiProviderProperties.class)
+@EnableConfigurationProperties({AiProviderProperties.class, AiResilienceProperties.class})
 public class InfraAiAutoConfiguration {
 
     @Bean
-    public ChatModelClient chatModelClient(AiProviderProperties properties) {
-        return new OpenAiChatModelClient(findProvider(properties, "deepseek", "chat"));
+    public ChatModelClient chatModelClient(
+            AiProviderProperties properties, AiResilienceProperties resilience, MeterRegistry meterRegistry) {
+        return new OpenAiChatModelClient(findProvider(properties, "deepseek", "chat"), resilience, meterRegistry);
     }
 
     @Bean
-    public EmbeddingClient embeddingClient(AiProviderProperties properties) {
-        return new OpenAiEmbeddingClient(findProvider(properties, "siliconflow", "embedding"));
+    public EmbeddingClient embeddingClient(
+            AiProviderProperties properties, AiResilienceProperties resilience, MeterRegistry meterRegistry) {
+        return new OpenAiEmbeddingClient(
+                findProvider(properties, "siliconflow", "embedding"), resilience, meterRegistry);
     }
 
     @Bean
-    public RerankClient rerankClient(AiProviderProperties properties) {
-        return new OpenAiRerankClient(findProvider(properties, "siliconflow", "rerank"));
+    public RerankClient rerankClient(
+            AiProviderProperties properties, AiResilienceProperties resilience, MeterRegistry meterRegistry) {
+        return new OpenAiRerankClient(findProvider(properties, "siliconflow", "rerank"), resilience, meterRegistry);
     }
 
     private Provider findProvider(AiProviderProperties properties, String name, String capability) {
