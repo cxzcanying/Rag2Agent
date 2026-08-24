@@ -158,15 +158,15 @@
 
 ### P1 缓存、并发与成本
 
-- [ ] **多级缓存**（查询 Embedding 两级缓存已落地）
-  - 当前：已增加 Caffeine L1 + Redis L2 查询 Embedding 缓存，key 包含 provider/model/规范化查询摘要，缓存命中/未命中/错误写入 Micrometer；缓存依赖故障透明回源。
-  - 未完成：热门检索结果和只读工具结果尚未缓存；Embedding 缓存尚未接入 single-flight，冷启动并发相同查询仍可能重复调用 provider；写入/版本切换主动失效策略待补。
+- [ ] **多级缓存**（查询 Embedding 两级缓存和 single-flight 已落地）
+  - 当前：已增加 Caffeine L1 + Redis L2 查询 Embedding 缓存，key 包含 provider/model/规范化查询摘要，缓存命中/未命中/错误写入 Micrometer；缓存依赖故障透明回源；同一 key 的并发冷启动共享 Future，失败后占位会清理并允许下一次重试。
+  - 未完成：热门检索结果和只读工具结果尚未缓存；写入/版本切换主动失效策略待补。
   - 方案：Caffeine L1 + Redis L2；缓存 key 至少包含 provider、model、版本、规范化文本和维度；优先缓存查询 embedding、热门检索结果和只读工具结果，写入/版本切换主动失效；不缓存带权限差异的裸文档结果。
   - 验收：命中/未命中可观测，权限和文档版本不会串缓存。
 
-- [ ] **检索并行化**（两路召回并行已落地）
-  - 当前：`HybridSearchService` 已使用受控 `retrievalTaskExecutor` 并行执行向量和关键词召回，RRF/Rerank 仍串行；线程池使用上下文传播装饰器，避免 trace/MDC 丢失。
-  - 未完成：两路召回尚未增加统一超时、取消和单路降级；线程池队列满时的背压策略和并行前后 P95 实测数据待补。
+- [ ] **检索并行化**（两路召回并行、超时和单路降级已落地）
+  - 当前：`HybridSearchService` 已使用受控 `retrievalTaskExecutor` 并行执行向量和关键词召回，RRF/Rerank 仍串行；线程池使用上下文传播装饰器，避免 trace/MDC 丢失；总超时可由 `rag2agent.search.parallel-timeout-millis` 配置，超时只取消未完成分支并保留已完成结果，且记录超时指标。
+  - 未完成：线程池队列满时的背压策略和并行前后 P95 实测数据待补。
   - 方案：使用受控 `CompletableFuture`/虚拟线程执行向量和关键词召回并行，统一超时和取消；RRF 后再串行 Rerank；禁止使用无界 common pool。
   - 验收：两路并行时端到端延迟接近较慢一路而非两路相加；任一路超时可按策略降级。
 

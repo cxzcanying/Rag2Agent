@@ -10,6 +10,9 @@ import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.List;
 import java.util.function.Supplier;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -26,6 +29,7 @@ public class QueryEmbeddingCache {
     private final ObjectMapper objectMapper;
     private final EmbeddingCacheProperties properties;
     private final MeterRegistry meterRegistry;
+    private final ConcurrentMap<String, CompletableFuture<List<Float>>> inFlight = new ConcurrentHashMap<>();
 
     public QueryEmbeddingCache(
             StringRedisTemplate redis,
@@ -53,6 +57,24 @@ public class QueryEmbeddingCache {
             return local;
         }
         count("l1", "miss");
+        CompletableFuture<List<Float>> candidate = new CompletableFuture<>();
+        CompletableFuture<List<Float>> shared = inFlight.putIfAbsent(key, candidate);
+        if (shared != null) {
+            return shared.join();
+        }
+        try {
+            List<Float> vector = loadFromL2OrSource(key, loader);
+            candidate.complete(vector);
+            return vector;
+        } catch (RuntimeException exception) {
+            candidate.completeExceptionally(exception);
+            throw exception;
+        } finally {
+            inFlight.remove(key, candidate);
+        }
+    }
+
+    private List<Float> loadFromL2OrSource(String key, Supplier<List<Float>> loader) {
         try {
             String cached = redis.opsForValue().get(key);
             if (cached != null) {

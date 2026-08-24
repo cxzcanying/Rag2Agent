@@ -11,7 +11,8 @@ import org.springframework.core.task.support.ContextPropagatingTaskDecorator;
     Rag2AgentProperties.class,
     AgentProperties.class,
     RateLimitProperties.class,
-    EmbeddingCacheProperties.class
+    EmbeddingCacheProperties.class,
+    RetrievalProperties.class
 })
 public class BootstrapConfiguration {
 

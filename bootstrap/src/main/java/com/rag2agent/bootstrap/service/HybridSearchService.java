@@ -1,5 +1,6 @@
 package com.rag2agent.bootstrap.service;
 
+import com.rag2agent.bootstrap.config.RetrievalProperties;
 import com.rag2agent.infra.ai.client.EmbeddingClient;
 import com.rag2agent.infra.ai.client.RerankClient;
 import com.rag2agent.infra.ai.model.EmbeddingRequest;
@@ -21,7 +22,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -45,6 +49,7 @@ public class HybridSearchService {
     private final ObservationRegistry observationRegistry;
     private final Executor retrievalTaskExecutor;
     private final QueryEmbeddingCache queryEmbeddingCache;
+    private final RetrievalProperties retrievalProperties;
 
     /**
      * 三个依赖的分工：
@@ -58,7 +63,8 @@ public class HybridSearchService {
             MeterRegistry meterRegistry,
             ObservationRegistry observationRegistry,
             @Qualifier("retrievalTaskExecutor") Executor retrievalTaskExecutor,
-            QueryEmbeddingCache queryEmbeddingCache) {
+            QueryEmbeddingCache queryEmbeddingCache,
+            RetrievalProperties retrievalProperties) {
         this.jdbc = jdbc;
         this.embeddingClient = embeddingClient;
         this.rerankClient = rerankClient;
@@ -66,6 +72,7 @@ public class HybridSearchService {
         this.observationRegistry = observationRegistry;
         this.retrievalTaskExecutor = retrievalTaskExecutor;
         this.queryEmbeddingCache = queryEmbeddingCache;
+        this.retrievalProperties = retrievalProperties;
     }
 
     public List<RetrievalResult> search(Long kbId, String query, int topK) {
@@ -121,9 +128,10 @@ public class HybridSearchService {
                                 .observe(() -> keywordSearch(kbId, query, options.candidateTopK())),
                         retrievalTaskExecutor)
                 : CompletableFuture.completedFuture(List.of());
-        // 两路召回互不依赖，受控并行后再统一等待；任一路失败仍按失败传播，避免静默降低召回质量。
-        List<RetrievalResult> vectorResults = vectorFuture.join();
-        List<RetrievalResult> keywordResults = keywordFuture.join();
+        // 两路召回互不依赖，受控并行后统一等待；超时只降级掉未完成分支，其他异常仍向上抛出。
+        List<List<RetrievalResult>> parallelResults = awaitParallel(vectorFuture, keywordFuture);
+        List<RetrievalResult> vectorResults = parallelResults.get(0);
+        List<RetrievalResult> keywordResults = parallelResults.get(1);
 
         // RRF 融合两路结果，分数域统一、同名 chunk 去重累加
         int fusedTopK = options.rerankEnabled() ? options.candidateTopK() : options.topK();
@@ -149,6 +157,47 @@ public class HybridSearchService {
 
     private String metricStrategy(SearchOptions options) {
         return options.strategy().name().toLowerCase(Locale.ROOT);
+    }
+
+    private List<List<RetrievalResult>> awaitParallel(
+            CompletableFuture<List<RetrievalResult>> vectorFuture,
+            CompletableFuture<List<RetrievalResult>> keywordFuture) {
+        CompletableFuture<Void> all = CompletableFuture.allOf(vectorFuture, keywordFuture);
+        try {
+            all.get(retrievalProperties.getParallelTimeoutMillis(), TimeUnit.MILLISECONDS);
+            return List.of(vectorFuture.join(), keywordFuture.join());
+        } catch (TimeoutException exception) {
+            if (!vectorFuture.isDone()) {
+                vectorFuture.cancel(true);
+                meterRegistry.counter("rag2agent.search.retrieval.timeout", "route", "vector").increment();
+            }
+            if (!keywordFuture.isDone()) {
+                keywordFuture.cancel(true);
+                meterRegistry.counter("rag2agent.search.retrieval.timeout", "route", "keyword").increment();
+            }
+            return List.of(completedOrEmpty(vectorFuture), completedOrEmpty(keywordFuture));
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            vectorFuture.cancel(true);
+            keywordFuture.cancel(true);
+            throw new IllegalStateException("检索并行任务被中断", exception);
+        } catch (ExecutionException exception) {
+            throw propagate(exception.getCause());
+        }
+    }
+
+    private List<RetrievalResult> completedOrEmpty(CompletableFuture<List<RetrievalResult>> future) {
+        if (future.isCancelled() || future.isCompletedExceptionally()) {
+            return List.of();
+        }
+        return future.join();
+    }
+
+    private RuntimeException propagate(Throwable cause) {
+        if (cause instanceof RuntimeException runtimeException) {
+            return runtimeException;
+        }
+        return new IllegalStateException("检索并行任务失败", cause);
     }
 
     private Route resolveRoute(SearchOptions.Strategy strategy, String query) {

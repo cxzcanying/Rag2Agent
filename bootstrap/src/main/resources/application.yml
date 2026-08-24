@@ -62,6 +62,8 @@ sa-token:
   is-log: false
 
 rag2agent:
+  search:
+    parallel-timeout-millis: ${RAG2AGENT_SEARCH_PARALLEL_TIMEOUT_MILLIS:10000}
   cache:
     embedding:
       enabled: ${RAG2AGENT_EMBEDDING_CACHE_ENABLED:true}
