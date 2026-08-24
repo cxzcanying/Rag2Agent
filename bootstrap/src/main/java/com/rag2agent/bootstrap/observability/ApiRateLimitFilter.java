@@ -10,8 +10,9 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.time.Duration;
+import java.util.List;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -19,6 +20,12 @@ import org.springframework.web.filter.OncePerRequestFilter;
 /** Redis 固定窗口限流，Redis 故障时放行并交给健康检查告警。 */
 @Component
 public class ApiRateLimitFilter extends OncePerRequestFilter {
+
+    private static final DefaultRedisScript<Long> INCREMENT_WITH_TTL = new DefaultRedisScript<>(
+            "local count = redis.call('INCR', KEYS[1]) "
+                    + "if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end "
+                    + "return count",
+            Long.class);
 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
@@ -46,10 +53,10 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
         }
         String key = "rate-limit:" + StpUtil.getLoginIdAsString() + ":" + (System.currentTimeMillis() / (properties.getWindowSeconds() * 1000L));
         try {
-            Long count = redis.opsForValue().increment(key);
-            if (count != null && count == 1L) {
-                redis.expire(key, Duration.ofSeconds(properties.getWindowSeconds()));
-            }
+            Long count = redis.execute(
+                    INCREMENT_WITH_TTL,
+                    List.of(key),
+                    String.valueOf(properties.getWindowSeconds()));
             if (count != null && count > properties.getLimit()) {
                 response.setStatus(429);
                 meterRegistry.counter("rag2agent.api.rate_limit", "outcome", "rejected").increment();

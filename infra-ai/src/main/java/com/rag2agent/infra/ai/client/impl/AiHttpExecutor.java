@@ -5,6 +5,12 @@ import com.rag2agent.infra.ai.exception.AiClientException;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.Locale;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -34,7 +40,7 @@ final class AiHttpExecutor {
 
     Response execute(OkHttpClient client, Request request, String operation) throws IOException {
         if (!properties.isEnabled()) {
-            return executeOnce(client, request);
+            return executeOnce(client, request, operation);
         }
         beforeCall(operation);
         boolean permit = false;
@@ -64,18 +70,10 @@ final class AiHttpExecutor {
                     count(operation, "success");
                     return response;
                 }
-                String body = response.body() == null ? "" : response.body().string();
-                int status = response.code();
-                long retryAfter = parseRetryAfter(response.header("Retry-After"));
-                response.close();
-                AiClientException.Kind kind = status == 429
-                        ? AiClientException.Kind.RATE_LIMITED
-                        : status >= 500
-                                ? AiClientException.Kind.UPSTREAM_ERROR
-                                : AiClientException.Kind.CLIENT_ERROR;
-                lastFailure = new AiClientException(
-                        operation + " API 错误 " + status + ": " + body, kind, status, retryAfter);
-                onFailure(operation, kind);
+                lastFailure = classifyResponse(response, operation);
+                onFailure(operation, lastFailure.kind());
+                AiClientException.Kind kind = lastFailure.kind();
+                long retryAfter = lastFailure.retryAfterSeconds();
                 if (!isRetryable(kind) || attempt == properties.getMaxAttempts() || isCircuitOpen()) {
                     count(operation, outcome(kind));
                     throw lastFailure;
@@ -96,8 +94,31 @@ final class AiHttpExecutor {
         throw lastFailure == null ? new AiClientException(operation + " 调用失败") : lastFailure;
     }
 
-    private Response executeOnce(OkHttpClient client, Request request) throws IOException {
-        return client.newCall(request).execute();
+    private Response executeOnce(OkHttpClient client, Request request, String operation) throws IOException {
+        Response response = client.newCall(request).execute();
+        if (response.isSuccessful()) {
+            return response;
+        }
+        throw classifyResponse(response, operation);
+    }
+
+    private AiClientException classifyResponse(Response response, String operation) throws IOException {
+        int status = response.code();
+        String retryAfterHeader = response.header("Retry-After");
+        String body;
+        try {
+            body = response.body() == null ? "" : response.body().string();
+        } finally {
+            response.close();
+        }
+        long retryAfter = parseRetryAfter(retryAfterHeader);
+        AiClientException.Kind kind = status == 429
+                ? AiClientException.Kind.RATE_LIMITED
+                : status >= 500
+                        ? AiClientException.Kind.UPSTREAM_ERROR
+                        : AiClientException.Kind.CLIENT_ERROR;
+        return new AiClientException(
+                operation + " API 错误 " + status + ": " + body, kind, status, retryAfter);
     }
 
     private void beforeCall(String operation) {
@@ -198,10 +219,18 @@ final class AiHttpExecutor {
         if (value == null) {
             return 0;
         }
+        String normalized = value.trim();
         try {
-            return Math.max(0, Long.parseLong(value));
+            return Math.min(TimeUnit.DAYS.toSeconds(1), Math.max(0, Long.parseLong(normalized)));
         } catch (NumberFormatException ignored) {
-            return 0;
+            try {
+                Instant retryAt = ZonedDateTime.parse(normalized, DateTimeFormatter.RFC_1123_DATE_TIME)
+                        .toInstant();
+                long delayMillis = Duration.between(Instant.now(), retryAt).toMillis();
+                return Math.min(TimeUnit.DAYS.toSeconds(1), Math.max(0, (delayMillis + 999) / 1_000));
+            } catch (DateTimeParseException ignoredDate) {
+                return 0;
+            }
         }
     }
 
@@ -221,7 +250,7 @@ final class AiHttpExecutor {
 
     private void count(String operation, String outcome) {
         Counter.builder("rag2agent.ai.requests")
-                .tag("operation", operation.toLowerCase())
+                .tag("operation", normalizeOperation(operation))
                 .tag("outcome", outcome)
                 .register(meterRegistry)
                 .increment();
@@ -229,9 +258,13 @@ final class AiHttpExecutor {
 
     private void countCircuit(String operation, String state) {
         Counter.builder("rag2agent.ai.circuit.transitions")
-                .tag("operation", operation.isBlank() ? "unknown" : operation.toLowerCase())
+                .tag("operation", normalizeOperation(operation))
                 .tag("state", state)
                 .register(meterRegistry)
                 .increment();
+    }
+
+    private String normalizeOperation(String operation) {
+        return operation == null || operation.isBlank() ? "unknown" : operation.toLowerCase(Locale.ROOT);
     }
 }

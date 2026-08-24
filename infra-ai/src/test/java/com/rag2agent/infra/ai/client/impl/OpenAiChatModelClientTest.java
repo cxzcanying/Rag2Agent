@@ -13,6 +13,9 @@ import com.rag2agent.infra.ai.model.ChatCompletionResponse;
 import com.rag2agent.infra.ai.model.ChatMessage;
 import com.rag2agent.infra.ai.model.ToolCall;
 import com.rag2agent.infra.ai.model.ToolDef;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 import okhttp3.mockwebserver.MockResponse;
@@ -179,6 +182,36 @@ class OpenAiChatModelClientTest {
                         "deepseek", null, List.of(new ChatMessage("user", "hi")), Map.of())));
         assertEquals(AiClientException.Kind.UPSTREAM_ERROR, exception.kind());
         assertEquals(3, server.getRequestCount());
+    }
+
+    @Test
+    void complete_classifiesUpstreamFailureWhenResilienceDisabled() {
+        server.enqueue(new MockResponse().setResponseCode(503).setBody("busy"));
+        AiResilienceProperties properties = new AiResilienceProperties();
+        properties.setEnabled(false);
+        client = new OpenAiChatModelClient(provider(), properties, new SimpleMeterRegistry());
+
+        AiClientException exception = assertThrows(AiClientException.class, () -> client.complete(request()));
+
+        assertEquals(AiClientException.Kind.UPSTREAM_ERROR, exception.kind());
+        assertEquals(503, exception.statusCode());
+        assertEquals(1, server.getRequestCount());
+    }
+
+    @Test
+    void completeParsesHttpDateRetryAfter() {
+        server.enqueue(new MockResponse()
+                .setResponseCode(429)
+                .setHeader("Retry-After", DateTimeFormatter.RFC_1123_DATE_TIME.format(
+                        ZonedDateTime.now(ZoneOffset.UTC).plusSeconds(5))));
+        AiResilienceProperties properties = new AiResilienceProperties();
+        properties.setMaxAttempts(1);
+        client = new OpenAiChatModelClient(provider(), properties, new SimpleMeterRegistry());
+
+        AiClientException exception = assertThrows(AiClientException.class, () -> client.complete(request()));
+
+        assertEquals(AiClientException.Kind.RATE_LIMITED, exception.kind());
+        assertTrue(exception.retryAfterSeconds() > 0);
     }
 
     @Test
