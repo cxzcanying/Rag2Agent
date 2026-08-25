@@ -96,5 +96,7 @@ export const evaluations = {
     body: JSON.stringify(body)
   }),
   listRuns: (kbId) => request('/evaluations/runs?kbId=' + kbId),
-  getRun: (runId) => request('/evaluations/runs/' + runId)
+  getRun: (runId) => request('/evaluations/runs/' + runId),
+  results: (runId) => request('/evaluations/runs/' + runId + '/results'),
+  cancel: (runId) => request('/evaluations/runs/' + runId + '/cancel', { method: 'POST' })
 }

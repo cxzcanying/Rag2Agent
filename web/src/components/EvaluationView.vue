@@ -12,6 +12,7 @@ const candidateTopK = ref(20)
 const rrfK = ref(60)
 const rerankEnabled = ref(true)
 const evaluateGeneration = ref(false)
+const timeoutSeconds = ref(3600)
 const caseJson = ref('[{"question":"示例问题","expectedAnswer":"","goldenDocumentIds":[1]}]')
 const runs = ref([])
 const running = ref(false)
@@ -61,7 +62,8 @@ async function runEvaluation() {
         candidateTopK: candidateTopK.value,
         rrfK: rrfK.value,
         rerankEnabled: rerankEnabled.value,
-        evaluateGeneration: evaluateGeneration.value
+        evaluateGeneration: evaluateGeneration.value,
+        timeoutSeconds: timeoutSeconds.value
       }
     }, crypto.randomUUID())
     ElMessage.success('评测已提交，运行 ID：' + submission.runId)
@@ -70,6 +72,16 @@ async function runEvaluation() {
     ElMessage.error(e.message)
   } finally {
     running.value = false
+  }
+}
+
+async function cancelRun(run) {
+  try {
+    await evaluations.cancel(run.runId)
+    ElMessage.success('已请求取消评测')
+    await loadRuns()
+  } catch (e) {
+    ElMessage.error(e.message)
   }
 }
 
@@ -119,6 +131,9 @@ onUnmounted(() => window.clearInterval(pollTimer))
         <el-checkbox v-model="rerankEnabled">启用 Rerank</el-checkbox>
         <el-checkbox v-model="evaluateGeneration">生成与裁判</el-checkbox>
       </el-form-item>
+      <el-form-item label="超时（秒）">
+        <el-input-number v-model="timeoutSeconds" :min="1" :max="86400" />
+      </el-form-item>
       <div class="actions">
         <el-button type="primary" :loading="running" @click="runEvaluation">运行评测</el-button>
       </div>
@@ -141,7 +156,15 @@ onUnmounted(() => window.clearInterval(pollTimer))
         <el-table-column prop="name" label="名称" min-width="150" />
         <el-table-column prop="status" label="状态" width="170" />
         <el-table-column label="进度" width="100">
-          <template #default="{ row }">{{ row.completedCases }}/{{ row.totalCases }}</template>
+          <template #default="{ row }">
+            <el-progress :percentage="row.totalCases ? Math.round(row.completedCases * 100 / row.totalCases) : 0" :stroke-width="8" />
+            <small>{{ row.completedCases }}/{{ row.totalCases }}</small>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="90">
+          <template #default="{ row }">
+            <el-button v-if="row.status === 'QUEUED' || row.status === 'RUNNING'" text type="danger" @click="cancelRun(row)">取消</el-button>
+          </template>
         </el-table-column>
         <el-table-column label="Hit@k" width="100">
           <template #default="{ row }">{{ formatMetric(row.hitAtK) }}</template>

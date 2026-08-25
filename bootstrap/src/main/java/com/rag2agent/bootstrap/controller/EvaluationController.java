@@ -3,6 +3,7 @@ package com.rag2agent.bootstrap.controller;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.ImportCasesRequest;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.MatrixRequest;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunRequest;
+import com.rag2agent.bootstrap.dto.EvaluationDtos.CaseResult;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunStatus;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunSubmission;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunSummary;
@@ -108,5 +109,26 @@ public class EvaluationController {
         RunStatus status = evaluationService.getRun(runId);
         knowledgeBaseService.requireOwned(StpUtil.getLoginIdAsLong(), status.kbId());
         return ApiResponse.success(status);
+    }
+
+    @GetMapping("/runs/{runId}/results")
+    public ApiResponse<List<CaseResult>> listResults(@PathVariable Long runId) {
+        if (runId == null || runId <= 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "runId 必须为正数");
+        }
+        RunStatus status = evaluationService.getRun(runId);
+        knowledgeBaseService.requireOwned(StpUtil.getLoginIdAsLong(), status.kbId());
+        return ApiResponse.success(evaluationService.listResults(runId));
+    }
+
+    @PostMapping("/runs/{runId}/cancel")
+    public ApiResponse<Void> cancel(@PathVariable Long runId) {
+        if (runId == null || runId <= 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "runId 必须为正数");
+        }
+        RunStatus status = evaluationService.getRun(runId);
+        knowledgeBaseService.requireOwned(StpUtil.getLoginIdAsLong(), status.kbId());
+        evaluationService.cancel(runId);
+        return ApiResponse.success(null);
     }
 }

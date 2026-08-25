@@ -22,6 +22,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.time.Duration;
+import java.time.Instant;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -220,19 +221,42 @@ public class EvaluationService {
             // 获取任务信息和配置
             EvaluationRepository.EvalRun run = repository.findRun(runId).orElseThrow();
             EvaluationConfig config = parseConfig(run.configJson());
+            Instant deadline = run.startedAt() == null
+                    ? Instant.now().plusSeconds(config.timeoutSeconds())
+                    : run.startedAt().plusSeconds(config.timeoutSeconds());
 
             // 获取已完成的用例ID（用于断点续跑）
             Set<Long> completedCaseIds = repository.listCompletedCaseIds(runId);
 
             // 遍历所有测试用例
             for (EvaluationRepository.EvalCase evalCase : repository.listRunCases(runId)) {
+                if (!repository.isRunning(runId)) {
+                    return;
+                }
+                if (Instant.now().isAfter(deadline)) {
+                    repository.timeoutRun(runId);
+                    recordRunMetric(runTimer, "TIMEOUT");
+                    return;
+                }
                 if (completedCaseIds.contains(evalCase.id())) {
                     continue; // 跳过已完成的用例
                 }
                 // 执行单个用例的评测
                 CaseResult result = evaluateCase(evalCase, config);
+                if (!repository.isRunning(runId)) {
+                    return;
+                }
                 // 保存结果
                 repository.insertResult(runId, result);
+            }
+
+            if (!repository.isRunning(runId)) {
+                return;
+            }
+            if (Instant.now().isAfter(deadline)) {
+                repository.timeoutRun(runId);
+                recordRunMetric(runTimer, "TIMEOUT");
+                return;
             }
 
             // 获取所有结果，计算汇总指标
@@ -262,8 +286,10 @@ public class EvaluationService {
 
         } catch (Exception e) {
             // 发生异常时标记任务失败
-            repository.failRun(runId, e.getMessage());
-            recordRunMetric(runTimer, "FAILED");
+            if (repository.isRunning(runId)) {
+                repository.failRun(runId, safeErrorMessage(e));
+                recordRunMetric(runTimer, "FAILED");
+            }
         }
     }
 
@@ -275,6 +301,22 @@ public class EvaluationService {
      */
     public List<RunSummary> listRuns(Long kbId) {
         return repository.listRuns(kbId);
+    }
+
+    public List<CaseResult> listResults(long runId) {
+        if (repository.findRun(runId).isEmpty()) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "评测运行不存在");
+        }
+        return repository.listResults(runId);
+    }
+
+    public void cancel(long runId) {
+        if (repository.findRun(runId).isEmpty()) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "评测运行不存在");
+        }
+        if (!repository.cancelRun(runId)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "评测已进入终态，无法取消");
+        }
     }
 
     /**
@@ -529,6 +571,11 @@ public class EvaluationService {
 
     private static int elapsedMs(long started) {
         return (int) Math.min(Integer.MAX_VALUE, Duration.ofNanos(System.nanoTime() - started).toMillis());
+    }
+
+    private static String safeErrorMessage(Exception exception) {
+        String message = exception.getMessage();
+        return message == null || message.isBlank() ? exception.getClass().getSimpleName() : message;
     }
 
     /**

@@ -5,6 +5,8 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import java.time.Instant;
@@ -33,7 +35,21 @@ public final class EvaluationDtos {
             Double rrfK,
             Boolean rerankEnabled,
             Double rerankMinScore,
-            Boolean evaluateGeneration) {
+            Boolean evaluateGeneration,
+            @Min(value = 1, message = "timeoutSeconds 必须至少为 1")
+            @Max(value = 86400, message = "timeoutSeconds 不能超过 86400")
+            Integer timeoutSeconds) {
+
+        public EvaluationConfig(
+                SearchOptions.Strategy strategy,
+                Integer topK,
+                Integer candidateTopK,
+                Double rrfK,
+                Boolean rerankEnabled,
+                Double rerankMinScore,
+                Boolean evaluateGeneration) {
+            this(strategy, topK, candidateTopK, rrfK, rerankEnabled, rerankMinScore, evaluateGeneration, null);
+        }
 
         public SearchOptions toSearchOptions() {
             int normalizedTopK = topK == null ? 5 : topK;
@@ -59,7 +75,8 @@ public final class EvaluationDtos {
                     options.rrfK(),
                     options.rerankEnabled(),
                     options.rerankMinScore(),
-                    shouldEvaluateGeneration());
+                    shouldEvaluateGeneration(),
+                    timeoutSeconds == null ? 3600 : timeoutSeconds);
         }
     }
 

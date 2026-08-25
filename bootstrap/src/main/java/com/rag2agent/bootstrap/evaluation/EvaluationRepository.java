@@ -238,7 +238,7 @@ public class EvaluationRepository {
      */
     public boolean markRunning(long runId) {
         return jdbc.update(
-                "UPDATE eval_run SET status = 'RUNNING', completed_at = NULL, error_message = NULL "
+                "UPDATE eval_run SET status = 'RUNNING', started_at = now(), completed_at = NULL, error_message = NULL "
                         + "WHERE id = ? AND status = 'QUEUED'",
                 runId) == 1;
     }
@@ -277,6 +277,26 @@ public class EvaluationRepository {
         jdbc.update(
                 "UPDATE eval_run SET status = 'FAILED', error_message = ?, completed_at = now() WHERE id = ?",
                 errorMessage, runId);
+    }
+
+    public boolean cancelRun(long runId) {
+        return jdbc.update(
+                "UPDATE eval_run SET status = 'CANCELLED', error_message = ?, completed_at = now() "
+                        + "WHERE id = ? AND status IN ('QUEUED', 'RUNNING')",
+                "评测已取消", runId) == 1;
+    }
+
+    public boolean timeoutRun(long runId) {
+        return jdbc.update(
+                "UPDATE eval_run SET status = 'TIMEOUT', error_message = ?, completed_at = now() "
+                        + "WHERE id = ? AND status = 'RUNNING'",
+                "评测执行超时", runId) == 1;
+    }
+
+    public boolean isRunning(long runId) {
+        Integer count = jdbc.queryForObject(
+                "SELECT count(*) FROM eval_run WHERE id = ? AND status = 'RUNNING'", Integer.class, runId);
+        return count != null && count == 1;
     }
 
     /**
@@ -526,7 +546,7 @@ public class EvaluationRepository {
             Long id,
             Long kbId,
             String name,
-            String status,                // QUEUED | RUNNING | COMPLETED | COMPLETED_WITH_ERRORS | FAILED
+            String status,                // QUEUED | RUNNING | COMPLETED | COMPLETED_WITH_ERRORS | FAILED | CANCELLED | TIMEOUT
             String configJson,            // 评测配置（JSON）
             int totalCases,               // 总用例数
             int completedCases,           // 已完成用例数
