@@ -1,20 +1,18 @@
 package com.rag2agent.bootstrap.config;
 
+import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "rag2agent.cache.embedding")
 public class EmbeddingCacheProperties {
 
+    @Setter
     private boolean enabled = true;
     private int maxEntries = 10_000;
     private int ttlSeconds = 3_600;
 
     public boolean isEnabled() {
         return enabled;
-    }
-
-    public void setEnabled(boolean enabled) {
-        this.enabled = enabled;
     }
 
     public int getMaxEntries() {

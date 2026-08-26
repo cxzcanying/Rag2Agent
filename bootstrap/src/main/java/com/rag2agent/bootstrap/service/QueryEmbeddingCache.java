@@ -18,18 +18,57 @@ import java.util.function.Supplier;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
-/** 查询 Embedding 的 L1 Caffeine + L2 Redis 缓存；缓存失败时透明回源，不影响检索。 */
+/**
+ * 查询 Embedding 的二级缓存服务
+ *
+ * <p>采用 L1（本地 Caffeine）+ L2（Redis）双层缓存架构，用于缓存文本对应的向量表示。
+ *
+ * <p>缓存策略：
+ * <ul>
+ *   <li><b>L1 缓存（Caffeine）</b>：本地内存缓存，极快，适合高频访问的热点数据</li>
+ *   <li><b>L2 缓存（Redis）</b>：分布式缓存，适合跨实例共享，命中率更高</li>
+ *   <li><b>回源（Source）</b>：两级缓存都未命中时，调用 Embedding 服务生成向量</li>
+ * </ul>
+ *
+ * <p>核心设计：
+ * <ul>
+ *   <li><b>请求合并 (Coalescing)</b>：同一个 Key 的并发请求只触发一次回源，其他请求等待结果</li>
+ *   <li><b>缓存失败透明</b>：Redis 不可用时自动降级到本地缓存或直接回源，不影响检索功能</li>
+ *   <li><b>不可变数据</b>：返回的向量使用 {@code List.copyOf()} 包装，防止被修改</li>
+ * </ul>
+ *
+ * @author 21311
+ */
 @Service
 public class QueryEmbeddingCache {
 
+    /**
+     * Jackson 类型引用，用于将 Redis 中的 JSON 数组反序列化为 {@code List<Float>}
+     */
     private static final TypeReference<List<Float>> VECTOR_TYPE = new TypeReference<>() {};
 
-    private final Cache<String, List<Float>> localCache;
-    private final StringRedisTemplate redis;
-    private final ObjectMapper objectMapper;
-    private final EmbeddingCacheProperties properties;
-    private final MeterRegistry meterRegistry;
+    // ==================== 核心组件 ====================
+
+    private final Cache<String, List<Float>> localCache;        // L1 本地缓存（Caffeine）
+    private final StringRedisTemplate redis;                    // L2 分布式缓存（Redis）
+    private final ObjectMapper objectMapper;                    // JSON 序列化/反序列化
+    private final EmbeddingCacheProperties properties;          // 缓存配置（过期时间、容量等）
+    private final MeterRegistry meterRegistry;                  // Micrometer 指标埋点
+
+    /**
+     * 正在进行的请求映射表
+     *
+     * <p>用于实现"请求合并"功能：
+     * <ul>
+     *   <li>Key：缓存 Key</li>
+     *   <li>Value：正在执行中的 {@code CompletableFuture}</li>
+     *   <li>当同一个 Key 的多个请求同时到达时，只有一个会触发回源，
+     *       其他请求通过 {@code join()} 等待这个 Future 完成</li>
+     * </ul>
+     */
     private final ConcurrentMap<String, CompletableFuture<List<Float>>> inFlight = new ConcurrentHashMap<>();
+
+    // ==================== 构造函数 ====================
 
     public QueryEmbeddingCache(
             StringRedisTemplate redis,
@@ -40,76 +79,208 @@ public class QueryEmbeddingCache {
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.meterRegistry = meterRegistry;
+
+        // 初始化 Caffeine 本地缓存
         this.localCache = Caffeine.newBuilder()
-                .maximumSize(properties.getMaxEntries())
-                .expireAfterAccess(Duration.ofSeconds(properties.getTtlSeconds()))
+                .maximumSize(properties.getMaxEntries())                    // 最大条目数
+                .expireAfterAccess(Duration.ofSeconds(properties.getTtlSeconds()))  // 访问后过期
                 .build();
     }
 
+    // ==================== 核心方法：获取向量 ====================
+
+    /**
+     * 获取查询文本对应的向量表示
+     *
+     * <p>执行流程：
+     * <ol>
+     *   <li>检查缓存是否启用，未启用则直接回源</li>
+     *   <li>生成缓存 Key（包含 provider、model、query 的 SHA-256）</li>
+     *   <li>查询 L1 本地缓存，命中则直接返回</li>
+     *   <li>L1 未命中，尝试请求合并：检查是否有其他线程正在加载同一个 Key</li>
+     *   <li>如有正在加载的请求，等待其完成并返回结果</li>
+     *   <li>如无，作为"加载者"从 L2 或回源加载数据</li>
+     * </ul>
+     *
+     * @param provider Embedding 服务提供商（如 openai、aliyun）
+     * @param model 使用的模型名称（如 text-embedding-ada-002）
+     * @param query 用户查询文本
+     * @param loader 回源加载器，当缓存未命中时调用
+     * @return 查询文本对应的向量 {@code List<Float>}
+     */
     public List<Float> getOrCompute(String provider, String model, String query, Supplier<List<Float>> loader) {
+        // ========== 第一步：检查缓存是否启用 ==========
+        // 如果缓存被禁用，直接调用 Embedding 服务，不做任何缓存
         if (!properties.isEnabled()) {
             return loader.get();
         }
-        String key = "embedding:v1:" + provider + ":" + (model == null ? "default" : model) + ":" + sha256(query.trim());
+
+        // ========== 第二步：生成缓存 Key ==========
+        // Key 格式：embedding:v1:{provider}:{model}:{query的SHA-256}
+        // 使用 SHA-256 对 query 做哈希，避免 query 过长或包含特殊字符
+        String key = "embedding:v1:" + provider + ":"
+                + (model == null ? "default" : model) + ":"
+                + sha256(query.trim());
+
+        // ========== 第三步：查询 L1 本地缓存 ==========
         List<Float> local = localCache.getIfPresent(key);
         if (local != null) {
-            count("l1", "hit");
+            count("l1", "hit");    // 记录 L1 命中
             return local;
         }
-        count("l1", "miss");
+        count("l1", "miss");       // 记录 L1 未命中
+
+        // ========== 第四步：请求合并（解决缓存击穿） ==========
+        // 创建一个新的 CompletableFuture 作为"加载任务"
         CompletableFuture<List<Float>> candidate = new CompletableFuture<>();
+
+        // 原子性地放入 inFlight 映射表
+        // 如果 Key 已存在（说明其他线程正在加载），返回已存在的 Future
         CompletableFuture<List<Float>> shared = inFlight.putIfAbsent(key, candidate);
+
         if (shared != null) {
+            // 有其他线程正在加载同一个 Key → 等待它完成
+            // join() 会阻塞直到加载完成或异常
             return shared.join();
         }
+
+        // ========== 第五步：当前线程作为"加载者" ==========
+        // putIfAbsent 成功了，说明当前线程是第一个到达的
+        // 由它负责从 L2 或回源加载数据
         try {
+            // 从 L2 缓存加载，L2 未命中则回源
             List<Float> vector = loadFromL2OrSource(key, loader);
+            // 加载成功，完成 Future，唤醒所有等待的线程
             candidate.complete(vector);
             return vector;
         } catch (RuntimeException exception) {
+            // 加载失败，将异常传播给所有等待的线程
             candidate.completeExceptionally(exception);
             throw exception;
         } finally {
+            // 清除 inFlight 中的条目（无论成功还是失败）
+            // 使用 remove(key, candidate) 确保只移除当前线程放入的条目
+            // 防止移除被其他线程替换的条目
             inFlight.remove(key, candidate);
         }
     }
 
+    // ==================== L2 缓存或回源加载 ====================
+
+    /**
+     * 从 L2（Redis）缓存加载向量，未命中则回源（调用 Embedding 服务）
+     *
+     * <p>加载策略：
+     * <ol>
+     *   <li>查询 Redis，如果命中 → 反序列化 → 写入 L1 → 返回</li>
+     *   <li>Redis 未命中 → 调用 {@code loader.get()} 回源生成向量</li>
+     *   <li>回源成功后 → 写入 L1 和 L2 → 返回</li>
+     *   <li>Redis 发生异常 → 降级，直接回源（不阻断业务）</li>
+     *   <li>Redis 写入失败 → 记录指标，不影响返回（缓存失败透明）</li>
+     * </ol>
+     *
+     * @param key 缓存 Key
+     * @param loader 回源加载器
+     * @return 向量列表（不可变，通过 {@code List.copyOf()} 包装）
+     */
     private List<Float> loadFromL2OrSource(String key, Supplier<List<Float>> loader) {
+        // ========== 第一步：尝试从 L2（Redis）加载 ==========
         try {
             String cached = redis.opsForValue().get(key);
             if (cached != null) {
+                // Redis 命中 → 反序列化 JSON 为 List<Float>
                 List<Float> vector = List.copyOf(objectMapper.readValue(cached, VECTOR_TYPE));
+                // 写入 L1 本地缓存，加速后续访问
                 localCache.put(key, vector);
                 count("l2", "hit");
                 return vector;
             }
             count("l2", "miss");
         } catch (Exception ignored) {
+            // Redis 异常（连接超时、序列化失败等）→ 记录指标，降级到回源
+            // 不抛出异常，避免影响主业务
             count("l2", "error");
         }
+
+        // ========== 第二步：L2 未命中 → 回源 ==========
+        // 调用 Embedding 服务生成向量
         List<Float> vector = List.copyOf(loader.get());
+
+        // 写入 L1 本地缓存
         localCache.put(key, vector);
+
+        // ========== 第三步：异步写入 L2（Redis） ==========
         try {
-            redis.opsForValue().set(key, objectMapper.writeValueAsString(vector), Duration.ofSeconds(properties.getTtlSeconds()));
+            // 将向量序列化为 JSON 字符串
+            String json = objectMapper.writeValueAsString(vector);
+            // 写入 Redis，设置过期时间
+            redis.opsForValue().set(key, json, Duration.ofSeconds(properties.getTtlSeconds()));
         } catch (Exception ignored) {
+            // Redis 写入失败 → 只记录指标，不影响返回
+            // 下次请求会重新从 L2 读取或回源
             count("l2", "write_error");
         }
+
         return vector;
     }
 
+    // ==================== 指标埋点 ====================
+
+    /**
+     * 记录缓存访问指标
+     *
+     * <p>指标名：{@code rag2agent.cache.requests}
+     * <p>标签：
+     * <ul>
+     *   <li>{@code cache=embedding}：缓存类型</li>
+     *   <li>{@code level=l1|l2}：缓存层级</li>
+     *   <li>{@code outcome=hit|miss|error|write_error}：访问结果</li>
+     * </ul>
+     *
+     * @param level 缓存层级（l1 或 l2）
+     * @param outcome 访问结果（hit、miss、error、write_error）
+     */
     private void count(String level, String outcome) {
-        meterRegistry.counter("rag2agent.cache.requests", "cache", "embedding", "level", level, "outcome", outcome).increment();
+        meterRegistry.counter("rag2agent.cache.requests",
+                        "cache", "embedding",
+                        "level", level,
+                        "outcome", outcome)
+                .increment();
     }
 
+    // ==================== 工具方法 ====================
+
+    /**
+     * 计算字符串的 SHA-256 哈希值（十六进制字符串）
+     *
+     * <p>用途：将查询文本转换为固定长度的哈希值，作为缓存 Key 的一部分。
+     *
+     * <p>为什么用 SHA-256：
+     * <ul>
+     *   <li>保证相同 query 生成相同 Key（确定性）</li>
+     *   <li>固定长度（64 字符），避免 query 过长导致 Key 过长</li>
+     *   <li>避免 query 中的特殊字符（空格、换行等）破坏 Key 格式</li>
+     *   <li>几乎没有哈希冲突的可能</li>
+     * </ul>
+     *
+     * @param value 原始字符串
+     * @return SHA-256 哈希值（十六进制小写）
+     * @throws IllegalStateException JDK 不支持 SHA-256 算法时抛出
+     */
     private String sha256(String value) {
         try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
+            // 计算 SHA-256 摘要
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8));
+
+            // 转换为十六进制字符串
             StringBuilder hex = new StringBuilder(digest.length * 2);
             for (byte item : digest) {
                 hex.append(String.format("%02x", item));
             }
             return hex.toString();
         } catch (NoSuchAlgorithmException exception) {
+            // SHA-256 是 JDK 标准算法，理论上不会发生
             throw new IllegalStateException("JDK 缺少 SHA-256", exception);
         }
     }
