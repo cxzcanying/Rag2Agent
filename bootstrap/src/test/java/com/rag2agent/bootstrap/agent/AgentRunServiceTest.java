@@ -47,6 +47,7 @@ class AgentRunServiceTest {
         assertEquals("MAX_STEPS_REACHED", result.status());
         assertEquals("基于已有结果的结论", result.answer());
         assertTrue(captured.get().tools().isEmpty());
+        assertEquals("user", captured.get().messages().getLast().role());
         assertTrue(captured.get().messages().getLast().content().contains("禁止再调用任何工具"));
         assertEquals("done", events.getLast().type());
     }

@@ -399,7 +399,7 @@ public class AgentRunService {
         updateStatus(runId, "FINALIZING");
         List<ChatMessage> finalMessages = new ArrayList<>(messages);
         finalMessages.add(new ChatMessage(
-                "system",
+                "user",
                 "工具调用次数已达上限。禁止再调用任何工具，请基于已有上下文和工具结果直接给出最终回答；"
                         + "资料不足时明确说明，不要编造。"));
         long startMs = System.currentTimeMillis();
@@ -420,7 +420,7 @@ public class AgentRunService {
             }
             recordLlmMetric(startMs, "success");
             recordTokens(response.usage());
-            recordLlmStep(runId, maxIterations, response, System.currentTimeMillis() - startMs);
+            recordLlmStep(runId, maxIterations + 1, response, System.currentTimeMillis() - startMs);
             String answer = response.content().trim();
             updateStatus(runId, "MAX_STEPS_REACHED");
             recordAgentTransition("max_steps_reached");
