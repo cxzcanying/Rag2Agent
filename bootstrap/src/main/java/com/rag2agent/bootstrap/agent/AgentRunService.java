@@ -387,11 +387,57 @@ public class AgentRunService {
             }
         }
 
-        updateStatus(runId, "FAILED");
-        recordAgentTransition("failed");
-        String message = "达到最大迭代次数，仍未完成";
-        onEvent.accept(new AgentEvent("error", message));
-        return new AgentExecutionResult(runId, "FAILED", message, references, null);
+        return finalizeAtMaxSteps(runId, messages, references, maxIterations, onEvent);
+    }
+
+    AgentExecutionResult finalizeAtMaxSteps(
+            Long runId,
+            List<ChatMessage> messages,
+            List<Reference> references,
+            int maxIterations,
+            Consumer<AgentEvent> onEvent) {
+        updateStatus(runId, "FINALIZING");
+        List<ChatMessage> finalMessages = new ArrayList<>(messages);
+        finalMessages.add(new ChatMessage(
+                "system",
+                "工具调用次数已达上限。禁止再调用任何工具，请基于已有上下文和工具结果直接给出最终回答；"
+                        + "资料不足时明确说明，不要编造。"));
+        long startMs = System.currentTimeMillis();
+        try {
+            ChatCompletionResponse response = Observation.createNotStarted(
+                            "rag2agent.agent.llm", observationRegistry)
+                    .highCardinalityKeyValue("run.id", String.valueOf(runId))
+                    .lowCardinalityKeyValue("operation", "finalize")
+                    .lowCardinalityKeyValue("provider", "deepseek")
+                    .lowCardinalityKeyValue("model", "configured")
+                    .observe(() -> chatClient.complete(new ChatCompletionRequest(
+                            "deepseek",
+                            null,
+                            finalMessages,
+                            Map.of("max_tokens", agentProperties.getMaxOutputTokens()))));
+            if (response == null || response.content() == null || response.content().isBlank()) {
+                throw new IllegalStateException("最大步数总结未返回有效答案");
+            }
+            recordLlmMetric(startMs, "success");
+            recordTokens(response.usage());
+            recordLlmStep(runId, maxIterations, response, System.currentTimeMillis() - startMs);
+            String answer = response.content().trim();
+            updateStatus(runId, "MAX_STEPS_REACHED");
+            recordAgentTransition("max_steps_reached");
+            onEvent.accept(new AgentEvent("done", Map.of(
+                    "answer", answer,
+                    "references", references,
+                    "maxStepsReached", true)));
+            return new AgentExecutionResult(runId, "MAX_STEPS_REACHED", answer, references, null);
+        } catch (Exception exception) {
+            recordLlmMetric(startMs, "error");
+            log.error("Agent 最大步数总结失败: runId={}", runId, exception);
+            updateStatus(runId, "FAILED");
+            recordAgentTransition("failed");
+            String message = safeAiError(exception);
+            onEvent.accept(new AgentEvent("error", message));
+            return new AgentExecutionResult(runId, "FAILED", null, references, null);
+        }
     }
 
     private List<Reference> searchAndRecord(

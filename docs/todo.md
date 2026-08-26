@@ -48,7 +48,7 @@
 
 - [ ] **chunk 逐条 INSERT 性能**（IngestPipelineService.persistChunks）：1310 条逐条插入，可改 MyBatis 批量插入（foreach / JDBC batch）。
 - [ ] **MinIO 下载全量读内存**（MinioStorageService.download）：`readAllBytes` 在 50MB 上限时内存峰值高，可改流式下载 + 解析。
-- [ ] **知识库列表未按 owner 过滤**（KnowledgeBaseService.list）：ACL 未实现，后续按 owner_user_id 过滤。
+- [x] **知识库列表按 owner 过滤**（KnowledgeBaseService.list）：已按 `owner_user_id` 查询；知识库、文档、检索、Agent 工具、评测 run 和审批入口均已覆盖 owner 校验。
 - [ ] **登录接口无限流/失败锁定**（AuthController）：后续 Phase 6 加用户级限流与失败次数锁定。
 - [ ] **查询增强实验：HyDE / Query Rewriting**（HybridSearchService.search）
   - 背景：疑问句直接向量化时，问题与文档（陈述句）在向量空间存在距离；HyDE 先让 LLM 生成"假设答案"再向量化检索，Query Rewriting 把问题改写为关键词句。
@@ -67,12 +67,19 @@
 - [x] **AuthService.register 并发竞态**（selectCount + insert 非原子）
   - 问题：并发注册同名用户可能同时通过 selectCount 检查，靠 DB 唯一约束兜底会抛 500 而非友好错误。
   - 方案：username 建唯一约束并捕获 DuplicateKeyException 转 BAD_REQUEST，或注册加分布式锁。
-- [x] **检索/文档/Agent 链路缺 kbId 归属校验（越权）**（SearchController / DocumentController / Agent 工具层 / 审批接口）
-  - 问题：登录校验已由全局 Sa-Token 拦截器覆盖，但接口只按 kbId/documentId 过滤：检索接口可查任意 kb_id；`search_knowledge_base` 工具用模型传入的 kb_id 检索；`delete_document` 工具可删任意 document_id；`/api/agent/approvals/{runId}` 不校验 run 归属当前用户。登录用户可越权访问他人知识库、审批他人操作。
-  - 方案：统一 ACL——kb_id → owner、document → kb → owner、run → user 归属校验，与 KnowledgeBaseService.list 的 ACL 同批落地。
+- [x] **检索/文档/Agent 链路 kbId 归属校验（越权）**（SearchController / DocumentController / Agent 工具层 / 审批接口）
+  - 已完成：`KnowledgeBaseService.requireOwned` 作为统一 owner 检查；`reingest/presign` 在服务层校验文档所属知识库；Agent 的 `search_knowledge_base/delete_document` 工具在执行层校验参数归属；审批校验 `run.user_id`，不是只依赖 Controller。
+  - 仍需补：工具调用的安全审计和越权集成测试，禁止只用单元 mock 覆盖真实 SQL 权限边界。
 - [ ] **只读工具调用未落库审计**（AgentRunService.executeLoop）
   - 问题：非审批工具（search_knowledge_base）执行时只推送 tool_start 事件，未写 tool_call 表，工具调用轨迹不完整。
   - 方案：所有工具调用统一落库（status SUCCEEDED/FAILED），审批工具沿用 WAITING_APPROVAL 流程。
+
+- [x] **Agent 最大迭代耗尽后的用户体验**（AgentRunService.executeLoop）
+  - 已完成：循环耗尽后进入 `FINALIZING`，发起一次不携带工具定义的强制总结；总结成功标记 `MAX_STEPS_REACHED` 并返回已有上下文答案，只有总结失败才标记 `FAILED`。测试覆盖“无工具总结”和上游失败脱敏。
+
+- [x] **API 错误响应技术细节泄露**（GlobalExceptionHandler / AiExceptionHandler / AgentController）
+  - 已完成：未知异常统一返回稳定内部错误文案；AI 按类型映射用户友好文案；Agent SSE 错误不透传堆栈、SQL、密钥或供应商原始响应。详细异常只写服务端日志。
+  - 后续：错误码目前仍是通用 HTTP 风格枚举；若前端需要稳定业务分支，再增加独立业务错误 ID，不能把异常 message 当协议。
 
 ## V2 需求审查：Agent 工程可用性
 
@@ -168,8 +175,9 @@
 
 - [ ] **多级缓存**（查询 Embedding 两级缓存和 single-flight 已落地）
   - 当前：已增加 Caffeine L1 + Redis L2 查询 Embedding 缓存，key 包含 provider/model/规范化查询摘要，缓存命中/未命中/错误写入 Micrometer；缓存依赖故障透明回源；同一 key 的并发冷启动共享 Future，失败后占位会清理并允许下一次重试。
-  - 未完成：热门检索结果和只读工具结果尚未缓存；写入/版本切换主动失效策略待补。
-  - 方案：Caffeine L1 + Redis L2；缓存 key 至少包含 provider、model、版本、规范化文本和维度；优先缓存查询 embedding、热门检索结果和只读工具结果，写入/版本切换主动失效；不缓存带权限差异的裸文档结果。
+  - 已确认设计：当前 key 为 `provider + model(default) + 规范化文本 SHA-256`，是内容寻址，不含 `document.version`；文档版本切换不会污染查询 embedding，文本相同可安全复用。
+  - 未完成：缓存 key 尚未显式包含 embedding dimension/model version；模型升级时需要版本化 namespace 或运维清空 Redis。热门检索结果和只读工具结果暂不缓存，避免 ACL、版本和权限维度串缓存。
+  - 方案：补充 `modelVersion/dimension` 命名空间和升级迁移策略；在确认权限、文档版本过滤后再评估检索结果缓存。
   - 验收：命中/未命中可观测，权限和文档版本不会串缓存。
 
 - [ ] **检索并行化**（两路召回并行、超时和单路降级已落地）
@@ -182,3 +190,30 @@
   - 当前：Agent 上下文没有统一 token budget；已有 Token 计数指标但没有预算拒绝、摘要、缓存抵扣或用户配额。
   - 方案：与上下文压缩共用预算器；限制单次输入/引用/输出，超过阈值先压缩；按 user/provider/model 记录 prompt/completion/cache token 和估算成本；加入每日额度、并发信号量和异常流量告警。
   - 验收：长文本不触发 provider 上限；恶意刷接口在达到配额后返回稳定 429；成本可按用户和模型追踪。
+
+## 2026-08-26 依赖、交付与产品化审查
+
+- [ ] **Neo4j / GraphRAG 可选回退**
+  - 当前事实：仓库只有 Docker Compose 的 Neo4j 容器和技术选型记录，没有 Neo4j client、图抽取、Cypher 查询或 `HybridSearchService` 图路由；因此当前检索不会因 Neo4j 故障而失败，但 GraphRAG 也尚未实现。
+  - 方案：GraphRAG 作为可选增强单独接入，增加 `rag2agent.search.graph.enabled=false` 默认开关；图路由异常时记录可观测 WARN 并回退向量+关键词，禁止把图数据库变成核心检索单点故障。
+  - 验收：开关关闭不创建 Neo4j 依赖；开关开启时 Neo4j 超时/不可用仍能返回基础检索结果，并有降级指标和测试。
+
+- [ ] **独立部署与开箱即用 Demo**
+  - 当前事实：`docker compose up -d` 依赖 PostgreSQL/pgvector、Redis、MinIO、RocketMQ、Neo4j、Jaeger 六类中间件，且宿主端口和外部 API 配置可能阻塞启动；全量 Spring context 测试也会因 MinIO 未启动失败。
+  - 方案：先提供 `docker compose --profile demo` 的最小演示拓扑和一键 health/bootstrap 脚本，明确端口覆盖与故障提示；保留完整 compose 作为 integration profile。SQLite 不能直接替代 pgvector/JSONB/数组/全文 SQL，Native Image 也会增加 MyBatis、MinIO、RocketMQ、PDF 和反射配置成本，暂不作为当前阶段承诺。
+  - 验收：新机器按 README 的最少步骤能启动健康检查和前端；缺少非核心服务时给出明确诊断，不能静默半启动。
+
+- [ ] **评测结果到系统优化的数据飞轮**
+  - 当前事实：评测已持久化 Hit@K、MRR、生成指标和逐题错误，但没有自动调参、Prompt 版本、实验候选生成或线上反馈表/API。
+  - 方案：先建设“可解释实验账本”：保存配置、数据集 revision、失败用例和结果快照；再增加人工确认的候选矩阵比较。自动改切块/路由/Prompt 前必须有版本、回滚、预算和人工批准，禁止让低质量评测结果直接修改线上策略。
+  - 后续：增加回答点赞/点踩、引用准确性反馈和脱敏 Bad Case 入集流程，并通过审核后进入评测集。
+
+- [ ] **多租户协作、资源隔离与配额**
+  - 当前事实：模型是用户拥有知识库的单 owner ACL，没有知识库成员、只读/可写/管理员角色、文档分享、按用户/知识库 token 和存储配额。
+  - 方案：先抽象 `knowledge_base_member` 与角色权限矩阵，再补资源计量和配额拒绝；所有异步任务、缓存、日志和指标都要带 owner/tenant 维度，避免仅靠 `kb_id` 推断租户。
+  - 边界：在个人 Demo 阶段不伪装成完整多租户 SaaS；角色和配额落地前继续保持 owner-only 默认策略。
+
+- [ ] **Agent 规划、反思与长期记忆**
+  - 当前事实：当前 Agent 是主动检索 + function calling 循环 + 审批恢复，具备最大步数和上下文压缩，但没有 Plan-and-Execute、反思评审、长期记忆或情景记忆抽象。
+  - 方案：先用可观测的 ReAct/Plan step 记录验证多步任务收益，再决定是否引入独立 Planner、反思器和记忆存储；每种新循环都必须复用工具 ACL、审批、幂等、预算和最大步数边界。
+  - 验收：多步任务有可恢复 plan/step 记录，失败可定位，记忆召回不绕过当前用户和知识库权限。
