@@ -4,7 +4,7 @@ import com.rag2agent.infra.ai.model.ChatCompletionRequest;
 import com.rag2agent.infra.ai.model.ChatCompletionResponse;
 import java.util.function.Consumer;
 
-public interface ChatModelClient {
+public interface ChatModelClient extends AiClientMetadata {
 
     ChatCompletionResponse complete(ChatCompletionRequest request);
 

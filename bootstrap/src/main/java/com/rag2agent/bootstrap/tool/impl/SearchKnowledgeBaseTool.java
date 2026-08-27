@@ -3,6 +3,7 @@ package com.rag2agent.bootstrap.tool.impl;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.service.HybridSearchService;
+import com.rag2agent.bootstrap.service.KnowledgeBaseService;
 import com.rag2agent.bootstrap.tool.Tool;
 import com.rag2agent.bootstrap.tool.ToolDescriptor;
 import com.rag2agent.rag.core.retrieval.RetrievalResult;
@@ -17,11 +18,21 @@ import org.springframework.stereotype.Component;
 public class SearchKnowledgeBaseTool implements Tool {
 
     private final HybridSearchService searchService;
+    private final KnowledgeBaseService knowledgeBaseService;
     private final ObjectMapper objectMapper;
 
-    public SearchKnowledgeBaseTool(HybridSearchService searchService, ObjectMapper objectMapper) {
+    public SearchKnowledgeBaseTool(
+            HybridSearchService searchService,
+            KnowledgeBaseService knowledgeBaseService,
+            ObjectMapper objectMapper) {
         this.searchService = searchService;
+        this.knowledgeBaseService = knowledgeBaseService;
         this.objectMapper = objectMapper;
+    }
+
+    @Override
+    public void validateAccess(Long userId, Map<String, Object> arguments) {
+        knowledgeBaseService.requireOwned(userId, ((Number) arguments.get("kb_id")).longValue());
     }
 
     @Override

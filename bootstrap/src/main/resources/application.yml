@@ -78,6 +78,7 @@ rag2agent:
     max-input-chars: ${RAG2AGENT_MAX_INPUT_CHARS:12000}
     summary-max-chars: ${RAG2AGENT_SUMMARY_MAX_CHARS:1200}
     max-output-tokens: ${RAG2AGENT_MAX_OUTPUT_TOKENS:1024}
+    tool-timeout-millis: ${RAG2AGENT_TOOL_TIMEOUT_MILLIS:10000}
   application:
     name: RAG2Agent
     version: 0.1.0-SNAPSHOT
@@ -88,6 +89,9 @@ rag2agent:
       - mcp-server
       - bootstrap
   ai:
+    active-chat-provider: ${RAG2AGENT_ACTIVE_CHAT_PROVIDER:deepseek}
+    active-embedding-provider: ${RAG2AGENT_ACTIVE_EMBEDDING_PROVIDER:siliconflow}
+    active-rerank-provider: ${RAG2AGENT_ACTIVE_RERANK_PROVIDER:siliconflow}
     resilience:
       enabled: ${RAG2AGENT_AI_RESILIENCE_ENABLED:true}
       max-attempts: ${RAG2AGENT_AI_MAX_ATTEMPTS:3}

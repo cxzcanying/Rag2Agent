@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS tool_call (
     run_id         BIGINT NOT NULL REFERENCES agent_run(id),
     step_id        BIGINT REFERENCES agent_step(id),
     tool_name      VARCHAR(64) NOT NULL,
-    status         VARCHAR(32) NOT NULL, -- PENDING/WAITING_APPROVAL/APPROVED/REJECTED/SUCCEEDED/FAILED
+    status         VARCHAR(32) NOT NULL, -- EXECUTING/WAITING_APPROVAL/REJECTED/SUCCEEDED/FAILED/TIMED_OUT
     input          JSONB,
     output         JSONB,
     error_message  TEXT,

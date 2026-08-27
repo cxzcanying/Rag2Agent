@@ -8,6 +8,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class AiProviderProperties {
 
     private List<Provider> providers = new ArrayList<>();
+    private String activeChatProvider = "deepseek";
+    private String activeEmbeddingProvider = "siliconflow";
+    private String activeRerankProvider = "siliconflow";
 
     public List<Provider> getProviders() {
         return providers;
@@ -15,6 +18,30 @@ public class AiProviderProperties {
 
     public void setProviders(List<Provider> providers) {
         this.providers = providers;
+    }
+
+    public String getActiveChatProvider() {
+        return activeChatProvider;
+    }
+
+    public void setActiveChatProvider(String activeChatProvider) {
+        this.activeChatProvider = activeChatProvider;
+    }
+
+    public String getActiveEmbeddingProvider() {
+        return activeEmbeddingProvider;
+    }
+
+    public void setActiveEmbeddingProvider(String activeEmbeddingProvider) {
+        this.activeEmbeddingProvider = activeEmbeddingProvider;
+    }
+
+    public String getActiveRerankProvider() {
+        return activeRerankProvider;
+    }
+
+    public void setActiveRerankProvider(String activeRerankProvider) {
+        this.activeRerankProvider = activeRerankProvider;
     }
 
     public static class Provider {

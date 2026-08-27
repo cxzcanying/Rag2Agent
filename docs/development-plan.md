@@ -85,6 +85,14 @@
 - 已验证：`/api/health` 返回 `UP`；Jaeger `/api/services` 已出现 `rag2agent`，可查询 HTTP span；前后端构建通过。
 - 未完成：RocketMQ 当前以消息属性携带 traceId，消费端建立独立 span，尚未实现跨进程 parent span 关联；需要后续接入标准传播器后再宣称 HTTP→MQ 单 trace 串联。
 
+### 第二版 D6 实际进度（模型与工具扩展）
+
+- 已完成：按 chat/embedding/rerank capability 解析 active provider，主链路、缓存 key 和可观测标签不再依赖固定 provider 名称；新增 OpenAI-compatible provider 只需增加配置并切换 active 项。
+- 已完成：内部工具和可选 MCP 工具统一进入 `ToolRegistry`，工具参数按 descriptor schema 做必填项和基础类型校验；新增只读工具无需修改 Agent 循环。
+- 已完成：`ToolExecutor` 统一执行权限钩子、有界线程池、超时、Observation/Micrometer 和 `tool_call` 成功/失败/超时审计；高风险工具继续复用现有审批记录，不重复创建调用记录。
+- 已完成：MCP 远程工具发现/调用契约和本地适配；远程发现失败时保留本地工具，远程调用受统一超时隔离。
+- 待后续：真实 MCP 网络 transport、认证和服务端权限实现；非 OpenAI-compatible provider 仍需新增协议 adapter，动态刷新仍归配置中心阶段。
+
 ### V2 范围裁决
 
 - **本周必须做**：评测异步化、上下文预算、OTel/Jaeger 链路、结构化日志、限流/超时/重试/降级、幂等、Token 与缓存指标。

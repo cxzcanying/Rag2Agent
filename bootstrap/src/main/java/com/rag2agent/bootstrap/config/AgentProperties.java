@@ -15,5 +15,6 @@ public class AgentProperties {
     private int maxInputChars = 12000;
     private int summaryMaxChars = 1200;
     private int maxOutputTokens = 1024;
+    private long toolTimeoutMillis = 10000;
 
 }

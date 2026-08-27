@@ -157,12 +157,12 @@
 ### P1 可插拔与动态配置
 
 - [ ] **模型热插拔与模型配置解耦**（部分已有）
-  - 当前：`infra-ai` 已有 Chat/Embedding/Rerank 接口，模型名通过配置注入；但 `InfraAiAutoConfiguration` 仍按 `deepseek`/`siliconflow` 名称硬选择，新增非兼容 provider 需要改装配代码，且变更需要重启。
+  - 当前：已增加按 capability 选择 active provider 的 `AiProviderRegistry`，Chat/Embedding/Rerank 主链路、缓存 key 和可观测标签使用客户端实际 provider/model；新增 OpenAI-compatible provider 只改配置。非兼容 provider adapter 和运行时动态刷新尚未实现，配置变更仍需重启。
   - 方案：按 capability 建 provider registry，provider adapter 只实现统一接口；OpenAI-compatible provider 仅新增配置，非兼容协议新增 adapter；配置包含 active provider、model、timeout、限流策略和版本。短期支持重启生效，动态刷新作为配置中心能力单独验收。
   - 验收：新增一个 OpenAI-compatible provider 只改配置；新增非兼容 provider 只新增 adapter，不改检索/Agent 核心流程。
 
 - [ ] **MCP 工具/知识源扩展边界**（部分已有）
-  - 当前：bootstrap 有 `ToolRegistry` 和工具实现；`mcp-server` 目前只有占位 `McpToolRegistry` 接口，尚未真正完成 MCP transport、远程工具发现和超时隔离。
+  - 当前：已统一 `ToolDescriptor + ToolRegistry + ToolExecutor`，内部/MCP 工具共用 schema 校验、权限钩子、有界线程池、超时、指标和 `tool_call` 审计；远程发现失败会回退本地工具。`mcp-server` 已定义远程发现/调用契约，但真实网络 transport、认证和远端权限校验尚未实现。
   - 方案：统一 `ToolDescriptor + ToolExecutor`，MCP 远程工具适配为同一执行接口；工具注册、参数 schema、权限、超时、审计和审批由核心编排层负责，具体工具只实现执行逻辑。
   - 验收：新增只读工具不改 Agent 循环；高风险工具自动进入审批；远程 MCP 超时不会拖垮主请求。
 

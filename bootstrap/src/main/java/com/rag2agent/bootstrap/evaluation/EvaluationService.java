@@ -8,7 +8,6 @@ import com.rag2agent.bootstrap.dto.EvaluationDtos.EvaluationConfig;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunStatus;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunSubmission;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunSummary;
-import com.rag2agent.bootstrap.service.SearchOptions;
 import com.rag2agent.bootstrap.service.HybridSearchService;
 import com.rag2agent.framework.common.ErrorCode;
 import com.rag2agent.framework.exception.BusinessException;
@@ -425,7 +424,7 @@ public class EvaluationService {
                 new ChatMessage("system", GENERATION_SYSTEM),
                 new ChatMessage("user", "资料：\n" + context(retrieved) + "\n\n问题：" + question));
         ChatCompletionResponse response = chatClient.complete(new ChatCompletionRequest(
-                "deepseek", null, messages, Map.of("temperature", 0.0)));
+                chatClient.providerName(), null, messages, Map.of("temperature", 0.0)));
         return response.content() == null ? "" : response.content().trim();
     }
 
@@ -447,7 +446,7 @@ public class EvaluationService {
                 + "\n资料：\n" + context(retrieved);
 
         ChatCompletionResponse response = chatClient.complete(new ChatCompletionRequest(
-                "deepseek", null, List.of(
+                chatClient.providerName(), null, List.of(
                 new ChatMessage("system", JUDGE_SYSTEM),
                 new ChatMessage("user", prompt)),
                 Map.of("temperature", 0.0)));

@@ -189,7 +189,7 @@ public class IngestPipelineService {
                     .map(TextChunk::content)
                     .toList();
             EmbeddingResponse response = embeddingClient.embed(new EmbeddingRequest(
-                    "siliconflow", null, batchTexts));
+                    embeddingClient.providerName(), null, batchTexts));
             // 防御：API 少返回向量时按输入数量写会导致后半段 chunk 静默漏写，这里先校验数量一致
             if (response.vectors().size() != batchTexts.size()) {
                 throw new IllegalStateException("Embedding 返回数量不匹配: 期望 " + batchTexts.size()

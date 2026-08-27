@@ -44,6 +44,7 @@ public class OpenAiChatModelClient implements ChatModelClient {
     private final OkHttpClient http;
     private final String baseUrl;
     private final String apiKey;
+    private final String providerName;
     private final String defaultModel;
     private final AiHttpExecutor executor;
 
@@ -55,6 +56,7 @@ public class OpenAiChatModelClient implements ChatModelClient {
             Provider provider, AiResilienceProperties resilience, MeterRegistry meterRegistry) {
         this.baseUrl = trimTrailingSlash(provider.getBaseUrl());
         this.apiKey = provider.getApiKey();
+        this.providerName = provider.getName();
         this.defaultModel = provider.getChatModel();
         this.executor = new AiHttpExecutor(resilience, meterRegistry);
         this.http = new OkHttpClient.Builder()
@@ -63,6 +65,16 @@ public class OpenAiChatModelClient implements ChatModelClient {
                 //发出请求后等下一个字节的超时
                 .writeTimeout(30, TimeUnit.SECONDS)
                 .build();
+    }
+
+    @Override
+    public String providerName() {
+        return providerName;
+    }
+
+    @Override
+    public String modelName() {
+        return defaultModel;
     }
 
     @Override

@@ -36,6 +36,7 @@ public class OpenAiEmbeddingClient implements EmbeddingClient {
     private final OkHttpClient http;
     private final String baseUrl;
     private final String apiKey;
+    private final String providerName;
     private final String defaultModel;
     private final AiHttpExecutor executor;
 
@@ -47,6 +48,7 @@ public class OpenAiEmbeddingClient implements EmbeddingClient {
             Provider provider, AiResilienceProperties resilience, MeterRegistry meterRegistry) {
         this.baseUrl = trimTrailingSlash(provider.getBaseUrl());
         this.apiKey = provider.getApiKey();
+        this.providerName = provider.getName();
         this.defaultModel = provider.getEmbeddingModel();
         this.executor = new AiHttpExecutor(resilience, meterRegistry);
         this.http = new OkHttpClient.Builder()
@@ -55,6 +57,16 @@ public class OpenAiEmbeddingClient implements EmbeddingClient {
                 .readTimeout(60, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
                 .build();
+    }
+
+    @Override
+    public String providerName() {
+        return providerName;
+    }
+
+    @Override
+    public String modelName() {
+        return defaultModel;
     }
 
     @Override

@@ -214,12 +214,13 @@ public class HybridSearchService {
      * model 传 null 表示走 provider 配置里的默认模型（BAAI/bge-m3）。
      */
     private List<Float> embedQuery(String query) {
-        return queryEmbeddingCache.getOrCompute("siliconflow", null, query, () -> {
+        return queryEmbeddingCache.getOrCompute(
+                embeddingClient.providerName(), embeddingClient.modelName(), query, () -> {
             EmbeddingResponse response = Observation.createNotStarted(
                             "rag2agent.search.embedding", observationRegistry)
-                    .lowCardinalityKeyValue("provider", "siliconflow")
+                    .lowCardinalityKeyValue("provider", embeddingClient.providerName())
                     .observe(() -> embeddingClient.embed(new EmbeddingRequest(
-                            "siliconflow", null, List.of(query))));
+                            embeddingClient.providerName(), null, List.of(query))));
             // 向量化失败宁可抛异常，也不返回空结果让上层误以为"没查到"
             if (response.vectors().isEmpty()) {
                 throw new IllegalStateException("查询向量化返回为空");
@@ -298,7 +299,8 @@ public class HybridSearchService {
         List<String> contents = fused.stream().map(RetrievalResult::content).toList();
         // top_n 不能超过候选数，否则 rerank 服务端会报错
         RerankResponse response = rerankClient.rerank(
-                new RerankRequest("siliconflow", null, query, contents, Math.min(topK, contents.size())));
+                new RerankRequest(
+                        rerankClient.providerName(), null, query, contents, Math.min(topK, contents.size())));
         return response.results().stream()
                 .filter(result -> result.index() >= 0 && result.index() < fused.size())
                 .sorted(Comparator.comparingDouble(RerankResult::score).reversed())

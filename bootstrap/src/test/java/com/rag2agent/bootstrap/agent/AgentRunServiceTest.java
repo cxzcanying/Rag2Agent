@@ -90,6 +90,7 @@ class AgentRunServiceTest {
                 chatClient,
                 null,
                 null,
+                null,
                 runMapper,
                 stepMapper,
                 null,
@@ -98,7 +99,6 @@ class AgentRunServiceTest {
                 new SimpleMeterRegistry(),
                 ObservationRegistry.create(),
                 new AgentProperties(),
-                null,
                 null);
     }
 

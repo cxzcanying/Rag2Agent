@@ -45,4 +45,18 @@ public class BootstrapConfiguration {
         executor.setAwaitTerminationSeconds(10);
         return executor;
     }
+
+    /** 工具执行使用独立有界线程池，远程工具阻塞时不会占满请求线程。 */
+    @Bean(name = "toolTaskExecutor")
+    public ThreadPoolTaskExecutor toolTaskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(4);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(32);
+        executor.setThreadNamePrefix("tool-");
+        executor.setTaskDecorator(new ContextPropagatingTaskDecorator());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(10);
+        return executor;
+    }
 }

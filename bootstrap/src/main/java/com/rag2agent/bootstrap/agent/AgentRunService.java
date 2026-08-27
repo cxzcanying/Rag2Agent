@@ -11,11 +11,9 @@ import com.rag2agent.bootstrap.config.AgentProperties;
 import com.rag2agent.bootstrap.mapper.AgentRunMapper;
 import com.rag2agent.bootstrap.mapper.AgentStepMapper;
 import com.rag2agent.bootstrap.mapper.ToolCallRecordMapper;
-import com.rag2agent.bootstrap.mapper.DocumentMetaMapper;
-import com.rag2agent.bootstrap.entity.DocumentMeta;
 import com.rag2agent.bootstrap.service.HybridSearchService;
 import com.rag2agent.bootstrap.service.KnowledgeBaseService;
-import com.rag2agent.bootstrap.tool.Tool;
+import com.rag2agent.bootstrap.tool.ToolExecutor;
 import com.rag2agent.bootstrap.tool.ToolRegistry;
 import com.rag2agent.framework.common.ErrorCode;
 import com.rag2agent.framework.exception.BusinessException;
@@ -72,6 +70,7 @@ public class AgentRunService {
     private final ChatModelClient chatClient;
     private final HybridSearchService searchService;
     private final ToolRegistry toolRegistry;
+    private final ToolExecutor toolExecutor;
     private final AgentRunMapper runMapper;
     private final AgentStepMapper stepMapper;
     private final ToolCallRecordMapper toolCallMapper;
@@ -82,12 +81,12 @@ public class AgentRunService {
     private final AgentProperties agentProperties;
     private final ContextCompactor contextCompactor;
     private final KnowledgeBaseService knowledgeBaseService;
-    private final DocumentMetaMapper documentMapper;
 
     public AgentRunService(
             ChatModelClient chatClient,
             HybridSearchService searchService,
             ToolRegistry toolRegistry,
+            ToolExecutor toolExecutor,
             AgentRunMapper runMapper,
             AgentStepMapper stepMapper,
             ToolCallRecordMapper toolCallMapper,
@@ -96,11 +95,11 @@ public class AgentRunService {
             MeterRegistry meterRegistry,
             ObservationRegistry observationRegistry,
             AgentProperties agentProperties,
-            KnowledgeBaseService knowledgeBaseService,
-            DocumentMetaMapper documentMapper) {
+            KnowledgeBaseService knowledgeBaseService) {
         this.chatClient = chatClient;
         this.searchService = searchService;
         this.toolRegistry = toolRegistry;
+        this.toolExecutor = toolExecutor;
         this.runMapper = runMapper;
         this.stepMapper = stepMapper;
         this.toolCallMapper = toolCallMapper;
@@ -111,7 +110,6 @@ public class AgentRunService {
         this.agentProperties = agentProperties;
         this.contextCompactor = new ContextCompactor(agentProperties.getSummaryMaxChars());
         this.knowledgeBaseService = knowledgeBaseService;
-        this.documentMapper = documentMapper;
     }
 
     /**
@@ -243,15 +241,10 @@ public class AgentRunService {
         if (approved) {
             String output;
             try {
-                output = executeTool(run.getUserId(), pending.getToolName(), parseArguments(pending.getInput()));
-                pending.setStatus("SUCCEEDED");
-                pending.setOutput(toJson(output));
+                output = toolExecutor.execute(pending, run.getUserId(), parseArguments(pending.getInput()));
             } catch (Exception e) {
                 output = "工具执行失败: " + e.getMessage();
-                pending.setStatus("FAILED");
-                pending.setErrorMessage(e.getMessage());
             }
-            toolCallMapper.updateResult(pending);
             messages.add(ChatMessage.assistantWithToolCalls(List.of(
                     new ToolCall(toolCallId, "function", pending.getToolName(), pending.getInput()))));
             messages.add(ChatMessage.tool(toolCallId, pending.getToolName(), output));
@@ -317,10 +310,10 @@ public class AgentRunService {
                 response = Observation.createNotStarted("rag2agent.agent.llm", observationRegistry)
                         .highCardinalityKeyValue("run.id", String.valueOf(runId))
                         .lowCardinalityKeyValue("operation", "chat")
-                        .lowCardinalityKeyValue("provider", "deepseek")
-                        .lowCardinalityKeyValue("model", "configured")
+                        .lowCardinalityKeyValue("provider", chatClient.providerName())
+                        .lowCardinalityKeyValue("model", chatClient.modelName())
                         .observe(() -> chatClient.complete(new ChatCompletionRequest(
-                                "deepseek", null, requestMessages,
+                                chatClient.providerName(), null, requestMessages,
                                 Map.of("max_tokens", agentProperties.getMaxOutputTokens()),
                                 toolRegistry.toolDefs())));
             } catch (Exception e) {
@@ -371,7 +364,8 @@ public class AgentRunService {
                             "name", toolCall.name(), "arguments", toolCall.arguments())));
                     String output;
                     try {
-                        output = executeTool(userId, toolCall.name(), parseArguments(toolCall.arguments()));
+                        output = toolExecutor.execute(
+                                runId, userId, toolCall.name(), parseArguments(toolCall.arguments()));
                     } catch (Exception e) {
                         output = "工具执行失败: " + e.getMessage();
                     }
@@ -408,10 +402,10 @@ public class AgentRunService {
                             "rag2agent.agent.llm", observationRegistry)
                     .highCardinalityKeyValue("run.id", String.valueOf(runId))
                     .lowCardinalityKeyValue("operation", "finalize")
-                    .lowCardinalityKeyValue("provider", "deepseek")
-                    .lowCardinalityKeyValue("model", "configured")
+                    .lowCardinalityKeyValue("provider", chatClient.providerName())
+                    .lowCardinalityKeyValue("model", chatClient.modelName())
                     .observe(() -> chatClient.complete(new ChatCompletionRequest(
-                            "deepseek",
+                            chatClient.providerName(),
                             null,
                             finalMessages,
                             Map.of("max_tokens", agentProperties.getMaxOutputTokens()))));
@@ -462,57 +456,12 @@ public class AgentRunService {
         return references;
     }
 
-    private String executeTool(Long userId, String toolName, Map<String, Object> arguments) {
-        validateToolAccess(userId, toolName, arguments);
-        Tool tool = toolRegistry.get(toolName);
-        if (tool == null) {
-            throw new IllegalStateException("未知工具: " + toolName);
-        }
-        Timer.Sample sample = Timer.start(meterRegistry);
-        String outcome = "success";
-        try {
-            return Observation.createNotStarted("rag2agent.agent.tool", observationRegistry)
-                    .lowCardinalityKeyValue("tool", toolName)
-                    .observe(() -> tool.execute(arguments));
-        } catch (RuntimeException e) {
-            outcome = "error";
-            throw e;
-        } finally {
-            sample.stop(Timer.builder("rag2agent.agent.tool.duration")
-                    .tag("tool", toolName)
-                    .tag("outcome", outcome)
-                    .publishPercentileHistogram()
-                    .register(meterRegistry));
-        }
-    }
-
-    private void validateToolAccess(Long userId, String toolName, Map<String, Object> arguments) {
-        if ("search_knowledge_base".equals(toolName)) {
-            Object value = arguments.get("kb_id");
-            if (!(value instanceof Number number)) {
-                throw new BusinessException(ErrorCode.BAD_REQUEST, "工具参数 kb_id 无效");
-            }
-            knowledgeBaseService.requireOwned(userId, number.longValue());
-            return;
-        }
-        if ("delete_document".equals(toolName)) {
-            Object value = arguments.get("document_id");
-            if (!(value instanceof Number number)) {
-                throw new BusinessException(ErrorCode.BAD_REQUEST, "工具参数 document_id 无效");
-            }
-            DocumentMeta document = documentMapper.selectById(number.longValue());
-            if (document == null) {
-                throw new BusinessException(ErrorCode.NOT_FOUND, "文档不存在");
-            }
-            knowledgeBaseService.requireOwned(userId, document.getKbId());
-        }
-    }
-
     private Map<String, Object> parseArguments(String argumentsJson) {
         try {
             return objectMapper.readValue(argumentsJson, new TypeReference<>() {});
         } catch (JsonProcessingException e) {
-            throw new IllegalStateException("工具参数解析失败: " + argumentsJson, e);
+            log.warn("模型返回的工具参数不是合法 JSON");
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "工具参数格式无效");
         }
     }
 

@@ -11,7 +11,7 @@ RAG2Agent 是一个面向企业知识库问答和 Agent 工作流的 Java + Vue 
 | 账号与权限 | 注册、登录、Sa-Token 会话；知识库 owner 校验覆盖文档、检索、Agent 工具、评测和审批入口 |
 | 文档入库 | PDF 上传到 MinIO；RocketMQ 异步处理；PDF 解析、递归切块、Embedding、当前版本 chunk 写入 PostgreSQL/pgvector |
 | 检索 | Query Routing；向量检索与 `pg_trgm` 关键词检索并行；RRF 融合；可选 Rerank；返回引用来源 |
-| Agent | OpenAI-compatible function calling；检索/文档工具；写操作审批；SSE 对话；上下文压缩和最大步数后的无工具总结 |
+| Agent | OpenAI-compatible function calling；工具 schema/权限/审计/超时；写操作审批；SSE 对话；上下文压缩和最大步数后的无工具总结 |
 | AI 可靠性 | 超时、重试、熔断、降级、并发舱壁；Redis Lua 用户限流；失败响应统一脱敏 |
 | 缓存 | Caffeine L1 + Redis L2 Embedding 查询缓存和 single-flight；内容寻址 key 可复用未改变文本的结果 |
 | 可观测性 | Micrometer 指标、Prometheus、OpenTelemetry OTLP、Jaeger、JSON 日志；HTTP/检索/LLM/工具/MQ trace context 基础链路 |
@@ -28,9 +28,9 @@ RAG2Agent 是一个面向企业知识库问答和 Agent 工作流的 Java + Vue 
 模块职责：
 
 - `framework`：通用响应、错误处理、Redis、鉴权和持久化基础设施
-- `infra-ai`：AI provider、Chat、Embedding、Rerank、VectorStore 接口和客户端
+- `infra-ai`：按 capability 选择 active provider；Chat、Embedding、Rerank、VectorStore 接口和客户端
 - `rag-core`：解析、切块、检索、融合、重排和 Prompt 相关核心能力
-- `mcp-server`：MCP 能力的预留模块，当前没有完整 MCP 网络传输实现
+- `mcp-server`：MCP 远程工具发现/调用契约；bootstrap 已有适配和本地 fallback，当前没有完整网络传输实现
 - `bootstrap`：Spring Boot 启动模块、Controller、Agent、评测、MQ 消费和数据库访问
 - `web`：Vue 前端
 
@@ -95,6 +95,10 @@ DEEPSEEK_MODEL_PRO=deepseek-v4-pro
 SILICONFLOW_API_KEY=...
 SILICONFLOW_EMBEDDING_MODEL=BAAI/bge-m3
 SILICONFLOW_RERANK_MODEL=BAAI/bge-reranker-v2-m3
+RAG2AGENT_ACTIVE_CHAT_PROVIDER=deepseek
+RAG2AGENT_ACTIVE_EMBEDDING_PROVIDER=siliconflow
+RAG2AGENT_ACTIVE_RERANK_PROVIDER=siliconflow
+RAG2AGENT_TOOL_TIMEOUT_MILLIS=10000
 ROCKETMQ_NAMESRV=localhost:19876
 RAG2AGENT_EMBEDDING_CACHE_ENABLED=true
 RAG2AGENT_RATE_LIMIT=60
@@ -216,7 +220,7 @@ mvn -pl rag-core -am test -Dtest=RealPdfVerifyIT
 
 - 真实 tokenizer、provider usage 对账、流式 usage 解析和按用户/知识库 Token 配额尚未完成；当前上下文预算仍包含保守估算。
 - SSE 多行事件、半包和断线重连协议尚未完成；当前 SSE 适合本地演示，不应假设断线后自动续传。
-- Agent 已有同一 session 的并发锁和最大步数降级，但 `clientRequestId` 级别的完成后幂等、长任务锁租约续期和完整工具审计仍待补齐。
+- Agent 已有同一 session 的并发锁、最大步数降级和完整工具审计，但 `clientRequestId` 级别的完成后幂等与长任务锁租约续期仍待补齐。
 - 现有 ACL 是 owner-only，不是带共享、协作组、只读/可写/管理员角色的多租户模型；输入防御、资源配额和队列积压治理也仍在 TODO。
 - Neo4j 仅随 Compose 启动并保留端口，尚无实体抽取、Cypher 查询或 GraphRAG 检索链路；当前检索基线是向量 + 关键词。
 - 没有 SQLite 替代方案或 GraalVM 单文件发行物。当前 SQL 依赖 PostgreSQL 的 pgvector、JSONB、数组和全文能力，完整 Compose 是本地演示前提。

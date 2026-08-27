@@ -1,10 +1,14 @@
 package com.rag2agent.bootstrap.tool.impl;
 
+import com.rag2agent.bootstrap.entity.DocumentMeta;
 import com.rag2agent.bootstrap.mapper.DocumentChunkMapper;
 import com.rag2agent.bootstrap.mapper.DocumentMetaMapper;
 import com.rag2agent.bootstrap.mapper.IngestTaskMapper;
+import com.rag2agent.bootstrap.service.KnowledgeBaseService;
 import com.rag2agent.bootstrap.tool.Tool;
 import com.rag2agent.bootstrap.tool.ToolDescriptor;
+import com.rag2agent.framework.common.ErrorCode;
+import com.rag2agent.framework.exception.BusinessException;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Component;
@@ -19,14 +23,27 @@ public class DeleteDocumentTool implements Tool {
     private final DocumentMetaMapper documentMapper;
     private final DocumentChunkMapper chunkMapper;
     private final IngestTaskMapper ingestTaskMapper;
+    private final KnowledgeBaseService knowledgeBaseService;
 
     public DeleteDocumentTool(
             DocumentMetaMapper documentMapper,
             DocumentChunkMapper chunkMapper,
-            IngestTaskMapper ingestTaskMapper) {
+            IngestTaskMapper ingestTaskMapper,
+            KnowledgeBaseService knowledgeBaseService) {
         this.documentMapper = documentMapper;
         this.chunkMapper = chunkMapper;
         this.ingestTaskMapper = ingestTaskMapper;
+        this.knowledgeBaseService = knowledgeBaseService;
+    }
+
+    @Override
+    public void validateAccess(Long userId, Map<String, Object> arguments) {
+        Long documentId = ((Number) arguments.get("document_id")).longValue();
+        DocumentMeta document = documentMapper.selectById(documentId);
+        if (document == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "文档不存在");
+        }
+        knowledgeBaseService.requireOwned(userId, document.getKbId());
     }
 
     @Override
