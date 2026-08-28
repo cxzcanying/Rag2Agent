@@ -51,7 +51,7 @@ RAG2Agent 是一个面向企业知识库问答和 Agent 工作流的 Java + Vue 
 Copy-Item -LiteralPath .env.example -Destination .env
 # 编辑 .env，至少填写 DEEPSEEK_API_KEY 和 SILICONFLOW_API_KEY
 docker compose up -d
-mvn -pl bootstrap -am spring-boot:run
+mvn -pl bootstrap spring-boot:run
 ~~~
 
 `application.yml` 默认使用 `dev` profile，连接宿主机映射端口。首次启动会由 PostgreSQL 初始化脚本创建表；已有 PostgreSQL 数据卷需要手动执行 [003_evaluation.sql](docker/postgres/init/003_evaluation.sql) 才能启用评测表。
