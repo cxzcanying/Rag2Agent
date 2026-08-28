@@ -9,7 +9,10 @@ import java.util.Collections;
 import org.apache.rocketmq.common.message.Message;
 import org.apache.rocketmq.common.message.MessageExt;
 
-/** 通过 RocketMQ user properties 传播标准 W3C traceparent/tracestate。 */
+/**
+ * 通过 RocketMQ user properties 传播标准 W3C traceparent/tracestate。
+ * @author 21311
+ * */
 public final class MqTracePropagation {
 
     private static final TextMapPropagator PROPAGATOR = W3CTraceContextPropagator.getInstance();

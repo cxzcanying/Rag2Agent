@@ -93,6 +93,12 @@
 - 已完成：MCP 远程工具发现/调用契约和本地适配；远程发现失败时保留本地工具，远程调用受统一超时隔离。
 - 待后续：真实 MCP 网络 transport、认证和服务端权限实现；非 OpenAI-compatible provider 仍需新增协议 adapter，动态刷新仍归配置中心阶段。
 
+### 第二版 D7 实际进度（集成验收与成本治理）
+
+- 已完成：AI 请求和 Agent Token 指标统一带 `provider/model/operation/outcome` 低基数标签，完整响应的 `prompt_tokens/completion_tokens/total_tokens` 会进入 Micrometer。
+- 已验证：infra-ai、rag-core、bootstrap 的确定性单测通过；应用上下文测试仅因本机 MinIO 未启动失败。
+- 未完成：流式 usage 解析、真实 provider 成本账本、队列积压指标、公开评测回归、RocketMQ→Jaeger 父子链路和故障演练仍需中间件及真实 API 条件，保留在 TODO。
+
 ### V2 范围裁决
 
 - **本周必须做**：评测异步化、上下文预算、OTel/Jaeger 链路、结构化日志、限流/超时/重试/降级、幂等、Token 与缓存指标。

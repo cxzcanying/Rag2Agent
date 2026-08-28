@@ -137,7 +137,7 @@
   - 验收：超长输入、控制字符、提示注入样例和高频请求均优雅拒绝或降级，不泄露系统提示和密钥。
 
 - [ ] **AI 可靠性指标与配置化策略**
-  - 当前残留风险：已暴露 AI success/retry/timeout/upstream/rate-limit/circuit/bulkhead 和限流放行/拒绝指标；重试参数可由 YAML/环境变量配置，但尚未按 provider/model 动态刷新，且指标当前按客户端 operation 而非完整 provider/model 维度展开。
+  - 当前残留风险：已暴露 AI success/retry/timeout/upstream/rate-limit/circuit/bulkhead 指标，AI 请求和 Token 指标已带 provider/model/operation 低基数标签；重试参数仍未按 provider/model 动态刷新。
   - 方案：统一 `ai.request`、`ai.retry`、`ai.circuit`、`api.rate_limit` 指标，标签限制为 provider/model/operation/outcome；将 attempts、backoff、超时、熔断阈值纳入配置并支持运行时刷新。
 
 - [ ] **端到端幂等性**

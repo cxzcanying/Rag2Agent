@@ -49,7 +49,7 @@ public class OpenAiRerankClient implements RerankClient {
         this.apiKey = provider.getApiKey();
         this.providerName = provider.getName();
         this.defaultModel = provider.getRerankModel();
-        this.executor = new AiHttpExecutor(resilience, meterRegistry);
+        this.executor = new AiHttpExecutor(resilience, meterRegistry, providerName, defaultModel);
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)

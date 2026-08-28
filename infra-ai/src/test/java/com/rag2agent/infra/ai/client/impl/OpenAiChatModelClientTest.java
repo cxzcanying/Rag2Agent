@@ -29,16 +29,19 @@ class OpenAiChatModelClientTest {
 
     private MockWebServer server;
     private OpenAiChatModelClient client;
+    private SimpleMeterRegistry meterRegistry;
 
     @BeforeEach
     void setUp() throws Exception {
         server = new MockWebServer();
         server.start();
+        meterRegistry = new SimpleMeterRegistry();
         Provider provider = new Provider();
+        provider.setName("test-provider");
         provider.setBaseUrl(server.url("/").toString());
         provider.setApiKey("test-key");
         provider.setChatModel("test-chat-model");
-        client = new OpenAiChatModelClient(provider);
+        client = new OpenAiChatModelClient(provider, new AiResilienceProperties(), meterRegistry);
     }
 
     @AfterEach
@@ -66,6 +69,13 @@ class OpenAiChatModelClientTest {
         assertEquals("你好", response.content());
         assertEquals("stop", response.finishReason());
         assertEquals(15, response.usage().get("total_tokens"));
+        assertEquals(1.0, meterRegistry.get("rag2agent.ai.requests")
+                .tag("provider", "test-provider")
+                .tag("model", "test-chat-model")
+                .tag("operation", "chat")
+                .tag("outcome", "success")
+                .counter()
+                .count());
     }
 
     @Test

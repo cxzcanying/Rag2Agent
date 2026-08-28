@@ -44,7 +44,7 @@ import org.springframework.stereotype.Service;
 
 /**
  * Agent 执行状态机：INIT -> ROUTING -> EXECUTING -> WAITING_APPROVAL -> FINALIZING -> COMPLETED / FAILED。
- *
+ * <p>
  * 编排：先主动检索（无引用不答）→ function calling 循环（模型决定调工具）→ 高风险工具挂起等审批。
  * 审批挂起时把消息历史存 Redis，审批通过后恢复并继续循环。
  * @author 21311
@@ -319,6 +319,7 @@ public class AgentRunService {
             } catch (Exception e) {
                 recordLlmMetric(startMs, "error");
                 log.error("Agent LLM 调用失败: runId={}", runId, e);
+                // 新增DEGRADED状态用于表示 LLM 调用失败但已经有检索引用时，使得可用性更高，不再把整个 Agent 任务判定为失败
                 if (e instanceof AiClientException && !references.isEmpty()) {
                     String answer = "模型服务暂不可用，以下是本次检索到的参考资料。请稍后重试生成答案。";
                     updateStatus(runId, "DEGRADED");
@@ -334,7 +335,7 @@ public class AgentRunService {
             }
             recordLlmMetric(startMs, "success");
             if (response != null) {
-                recordTokens(response.usage());
+                recordTokens(response.usage(), chatClient.providerName(), chatClient.modelName());
             }
             recordLlmStep(runId, iteration, response, System.currentTimeMillis() - startMs);
 
@@ -413,7 +414,7 @@ public class AgentRunService {
                 throw new IllegalStateException("最大步数总结未返回有效答案");
             }
             recordLlmMetric(startMs, "success");
-            recordTokens(response.usage());
+            recordTokens(response.usage(), chatClient.providerName(), chatClient.modelName());
             recordLlmStep(runId, maxIterations + 1, response, System.currentTimeMillis() - startMs);
             String answer = response.content().trim();
             updateStatus(runId, "MAX_STEPS_REACHED");
@@ -541,12 +542,13 @@ public class AgentRunService {
                 .record(Duration.ofMillis(System.currentTimeMillis() - startedMs));
     }
 
-    private void recordTokens(Map<String, Object> usage) {
+    private void recordTokens(Map<String, Object> usage, String provider, String model) {
         if (usage == null) {
             return;
         }
-        recordTokenType(usage, "prompt_tokens", "prompt");
-        recordTokenType(usage, "completion_tokens", "completion");
+        recordTokenType(usage, "prompt_tokens", "prompt", provider, model);
+        recordTokenType(usage, "completion_tokens", "completion", provider, model);
+        recordTokenType(usage, "total_tokens", "total", provider, model);
     }
 
     private void recordCompaction(Long runId, int iteration, ContextCompactor.CompactionResult result) {
@@ -571,11 +573,13 @@ public class AgentRunService {
         stepMapper.insert(step);
     }
 
-    private void recordTokenType(Map<String, Object> usage, String key, String type) {
+    private void recordTokenType(Map<String, Object> usage, String key, String type, String provider, String model) {
         Object value = usage.get(key);
         if (value instanceof Number number) {
             Counter.builder("rag2agent.ai.tokens")
                     .tag("type", type)
+                    .tag("provider", provider == null || provider.isBlank() ? "unknown" : provider)
+                    .tag("model", model == null || model.isBlank() ? "configured" : model)
                     .register(meterRegistry)
                     .increment(number.doubleValue());
         }

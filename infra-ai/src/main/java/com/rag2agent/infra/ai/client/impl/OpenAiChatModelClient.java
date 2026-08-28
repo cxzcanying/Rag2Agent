@@ -58,7 +58,7 @@ public class OpenAiChatModelClient implements ChatModelClient {
         this.apiKey = provider.getApiKey();
         this.providerName = provider.getName();
         this.defaultModel = provider.getChatModel();
-        this.executor = new AiHttpExecutor(resilience, meterRegistry);
+        this.executor = new AiHttpExecutor(resilience, meterRegistry, providerName, defaultModel);
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(90, TimeUnit.SECONDS)

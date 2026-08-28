@@ -51,6 +51,8 @@ final class AiHttpExecutor {
     private final AiResilienceProperties properties;   // 弹性配置（重试次数、超时、阈值等）
     private final MeterRegistry meterRegistry;         // Micrometer 指标注册器
     private final Semaphore concurrency;               // 信号量，用于限制最大并发请求数（舱壁隔离）
+    private final String providerName;
+    private final String modelName;
 
     // ============ 熔断器状态变量 ============
     // 使用 synchronized + circuitMonitor 保证线程安全
@@ -61,9 +63,19 @@ final class AiHttpExecutor {
     private boolean halfOpenProbeInFlight;                     // 半开状态下是否有探测请求正在执行
 
     AiHttpExecutor(AiResilienceProperties properties, MeterRegistry meterRegistry) {
+        this(properties, meterRegistry, "unknown", "configured");
+    }
+
+    AiHttpExecutor(
+            AiResilienceProperties properties,
+            MeterRegistry meterRegistry,
+            String providerName,
+            String modelName) {
         this.properties = properties;
         this.meterRegistry = meterRegistry;
         this.concurrency = new Semaphore(properties.getMaxConcurrentRequests());
+        this.providerName = normalizeTag(providerName, "unknown");
+        this.modelName = normalizeTag(modelName, "configured");
     }
 
     /**
@@ -517,6 +529,8 @@ final class AiHttpExecutor {
      */
     private void count(String operation, String outcome) {
         Counter.builder("rag2agent.ai.requests")
+                .tag("provider", providerName)
+                .tag("model", modelName)
                 .tag("operation", normalizeOperation(operation))
                 .tag("outcome", outcome)
                 .register(meterRegistry)
@@ -535,6 +549,8 @@ final class AiHttpExecutor {
      */
     private void countCircuit(String operation, String state) {
         Counter.builder("rag2agent.ai.circuit.transitions")
+                .tag("provider", providerName)
+                .tag("model", modelName)
                 .tag("operation", normalizeOperation(operation))
                 .tag("state", state)
                 .register(meterRegistry)
@@ -546,5 +562,9 @@ final class AiHttpExecutor {
      */
     private String normalizeOperation(String operation) {
         return operation == null || operation.isBlank() ? "unknown" : operation.toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizeTag(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 }

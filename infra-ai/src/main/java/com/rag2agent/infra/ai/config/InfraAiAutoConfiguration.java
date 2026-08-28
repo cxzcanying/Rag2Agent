@@ -11,6 +11,12 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import io.micrometer.core.instrument.MeterRegistry;
 
+/**
+ * AI 基础设施自动配置：注册 Provider 能力路由，并按 chat、embedding、rerank 能力创建对应的客户端 Bean。
+ * 创建客户端时统一注入 AI 韧性配置和 Micrometer 指标注册器，使业务层只需依赖客户端接口。
+ *
+ * @author 21311
+ */
 @Configuration
 @EnableConfigurationProperties({AiProviderProperties.class, AiResilienceProperties.class})
 public class InfraAiAutoConfiguration {
