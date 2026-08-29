@@ -84,6 +84,70 @@ class ToolExecutorTest {
         }
     }
 
+    @Test
+    void rejectsInvalidArgumentsBeforeSubmittingAndAuditsFailure() {
+        RecordingMapper mapper = new RecordingMapper();
+        ThreadPoolTaskExecutor pool = pool();
+        try {
+            Tool tool = new Tool() {
+                @Override
+                public ToolDescriptor descriptor() {
+                    return new ToolDescriptor("test_tool", "测试工具",
+                            Map.of("type", "object", "required", List.of("query")), false);
+                }
+
+                @Override
+                public String execute(Map<String, Object> arguments) {
+                    return "never";
+                }
+            };
+            ToolExecutor executor = executor(mapper, pool, tool, 1000);
+            BusinessException exception = assertThrows(BusinessException.class,
+                    () -> executor.execute(7L, 9L, "test_tool", Map.of()));
+            assertEquals(ErrorCode.BAD_REQUEST, exception.errorCode());
+            assertEquals("FAILED", mapper.record.getStatus());
+        } finally {
+            pool.shutdown();
+        }
+    }
+
+    @Test
+    void rejectsWhenExecutorQueueIsFull() throws Exception {
+        RecordingMapper mapper = new RecordingMapper();
+        ThreadPoolTaskExecutor pool = pool();
+        java.util.concurrent.CountDownLatch started = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        try {
+            ToolExecutor executor = executor(mapper, pool, tool(arguments -> {
+                started.countDown();
+                try {
+                    release.await(2, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                }
+                return "ok";
+            }), 1000);
+            var first = java.util.concurrent.CompletableFuture.runAsync(
+                    () -> executor.execute(7L, 9L, "test_tool", Map.of()));
+            org.junit.jupiter.api.Assertions.assertTrue(started.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            var second = java.util.concurrent.CompletableFuture.runAsync(
+                    () -> executor.execute(7L, 9L, "test_tool", Map.of()));
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(1);
+            while (pool.getThreadPoolExecutor().getQueue().size() < 1
+                    && System.nanoTime() < deadline) {
+                Thread.yield();
+            }
+            BusinessException exception = assertThrows(BusinessException.class,
+                    () -> executor.execute(7L, 9L, "test_tool", Map.of()));
+            assertEquals(ErrorCode.UPSTREAM_UNAVAILABLE, exception.errorCode());
+            release.countDown();
+            first.join();
+            second.join();
+        } finally {
+            pool.getThreadPoolExecutor().shutdownNow();
+        }
+    }
+
     private static ToolExecutor executor(
             RecordingMapper mapper,
             ThreadPoolTaskExecutor pool,

@@ -25,6 +25,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.slf4j.Logger;
@@ -72,6 +73,7 @@ public class IngestPipelineService {
     private final IngestTaskService ingestTaskService;
     private final TransactionTemplate transactionTemplate;
     private final StringRedisTemplate redis;
+    private final MeterRegistry meterRegistry;
 
     public IngestPipelineService(
             DocumentMetaMapper documentMapper,
@@ -81,6 +83,20 @@ public class IngestPipelineService {
             IngestTaskService ingestTaskService,
             PlatformTransactionManager transactionManager,
             StringRedisTemplate redis) {
+        this(documentMapper, chunkMapper, storage, embeddingClient, ingestTaskService,
+                transactionManager, redis, io.micrometer.core.instrument.Metrics.globalRegistry);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public IngestPipelineService(
+            DocumentMetaMapper documentMapper,
+            DocumentChunkMapper chunkMapper,
+            MinioStorageService storage,
+            EmbeddingClient embeddingClient,
+            IngestTaskService ingestTaskService,
+            PlatformTransactionManager transactionManager,
+            StringRedisTemplate redis,
+            MeterRegistry meterRegistry) {
         this.documentMapper = documentMapper;
         this.chunkMapper = chunkMapper;
         this.storage = storage;
@@ -90,6 +106,7 @@ public class IngestPipelineService {
         // 用 TransactionTemplate 在方法内部精确控制事务边界。
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.redis = redis;
+        this.meterRegistry = meterRegistry;
     }
 
     public void process(Long documentId) {
@@ -111,9 +128,11 @@ public class IngestPipelineService {
                         List.of(lockKey), lockToken, String.valueOf(INGEST_LOCK_TTL.toSeconds()));
                 if (!Long.valueOf(1L).equals(renewed)) {
                     log.warn("入库锁续租失败: documentId={}", documentId);
+                    recordLeaseRenewal(renewed);
                 }
             } catch (RuntimeException exception) {
                 log.warn("入库锁续租异常: documentId={}", documentId, exception);
+                recordLeaseRenewalError();
             }
         }, INGEST_LOCK_TTL.toSeconds() / 3, INGEST_LOCK_TTL.toSeconds() / 3, TimeUnit.SECONDS);
         try {
@@ -126,8 +145,26 @@ public class IngestPipelineService {
                         List.of(lockKey), lockToken);
             } catch (RuntimeException exception) {
                 log.warn("入库锁释放异常: documentId={}", documentId, exception);
+                recordLeaseReleaseError();
             }
         }
+    }
+
+    private void lockMetric(String operation, String outcome) {
+        meterRegistry.counter("rag2agent.lock.operations", "lock", "ingest-document",
+                "operation", operation, "outcome", outcome).increment();
+    }
+
+    void recordLeaseRenewal(Long renewed) {
+        if (!Long.valueOf(1L).equals(renewed)) lockMetric("renew", "lost");
+    }
+
+    void recordLeaseRenewalError() {
+        lockMetric("renew", "error");
+    }
+
+    void recordLeaseReleaseError() {
+        lockMetric("release", "error");
     }
 
     private void processLocked(Long documentId, Long taskId) {

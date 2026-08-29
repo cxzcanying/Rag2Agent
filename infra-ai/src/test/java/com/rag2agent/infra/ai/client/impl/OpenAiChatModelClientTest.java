@@ -18,6 +18,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.AfterEach;
@@ -167,6 +168,23 @@ class OpenAiChatModelClientTest {
                 collected::append);
 
         assertEquals("你好", collected.toString());
+    }
+
+    @Test
+    void streamParsesProviderUsageAndSendsUsageOption() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"
+                        + "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\n"
+                        + "data: [DONE]\n\n"));
+        AtomicReference<Map<String, Object>> usage = new AtomicReference<>();
+        StringBuilder content = new StringBuilder();
+        client.stream(new ChatCompletionRequest(
+                        "deepseek", null, List.of(new ChatMessage("user", "hello")), Map.of()),
+                content::append, usage::set);
+        assertEquals("ok", content.toString());
+        assertEquals(5, usage.get().get("total_tokens"));
+        assertTrue(server.takeRequest().getBody().readUtf8().contains("\"include_usage\":true"));
     }
 
     @Test

@@ -62,6 +62,30 @@ class QueryEmbeddingCacheTest {
         assertEquals(2, calls.get());
     }
 
+    @Test
+    void modelVersionAndDimensionIsolateEntries() {
+        EmbeddingCacheProperties properties = new EmbeddingCacheProperties();
+        properties.setEnabled(true);
+        QueryEmbeddingCache cache = new QueryEmbeddingCache(
+                null, new ObjectMapper(), properties, new SimpleMeterRegistry());
+        AtomicInteger calls = new AtomicInteger();
+        cache.getOrCompute("provider", "model", "query", () -> {
+            calls.incrementAndGet();
+            return List.of(1.0f);
+        });
+        properties.setModelVersion("v2");
+        cache.getOrCompute("provider", "model", "query", () -> {
+            calls.incrementAndGet();
+            return List.of(2.0f);
+        });
+        properties.setDimension(2048);
+        cache.getOrCompute("provider", "model", "query", () -> {
+            calls.incrementAndGet();
+            return List.of(3.0f);
+        });
+        assertEquals(3, calls.get());
+    }
+
     private static void await(CountDownLatch latch) {
         try {
             latch.await(2, TimeUnit.SECONDS);

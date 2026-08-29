@@ -20,6 +20,7 @@ import io.micrometer.core.instrument.Timer;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import java.util.Comparator;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -275,6 +276,37 @@ public class HybridSearchService {
      * 两个条件 OR 避免输入稍有出入就漏召回；同样带 kb_id 与版本过滤。
      */
     private List<RetrievalResult> keywordSearch(Long kbId, String query, int topK) {
+        List<String> hanTerms = chineseBigrams(query);
+        if (!hanTerms.isEmpty()) {
+            // ponytail: 二元切分是零依赖兜底，无法替代 zhparser/pg_jieba；真实评测后再切换引擎。
+            String score = hanTerms.stream()
+                    .map(term -> "CASE WHEN c.content ILIKE '%' || ? || '%' THEN 1 ELSE 0 END")
+                    .collect(java.util.stream.Collectors.joining(" + "));
+            String predicates = hanTerms.stream()
+                    .map(term -> "c.content ILIKE '%' || ? || '%'")
+                    .collect(java.util.stream.Collectors.joining(" OR "));
+            List<Object> args = new ArrayList<>();
+            hanTerms.forEach(term -> args.add(escapeLike(term)));
+            args.add(hanTerms.size());
+            args.add(escapeLike(query));
+            hanTerms.forEach(term -> args.add(escapeLike(term)));
+            args.add(kbId);
+            args.add(topK);
+            String sql = """
+                    SELECT c.id, c.content, c.document_id, c.chunk_index,
+                           ((%s) / ?)::double precision AS score
+                    FROM document_chunk c
+                    JOIN document d ON d.id = c.document_id
+                    WHERE c.kb_id = ? AND c.version = d.version
+                      AND (c.content ILIKE '%' || ? || '%' OR %s)
+                    ORDER BY score DESC
+                    LIMIT ?
+                    """.formatted(score, predicates);
+            return jdbc.query(sql, (rs, rowNum) -> new RetrievalResult(
+                    rs.getString("id"), rs.getString("content"), rs.getDouble("score"),
+                    Map.of("documentId", rs.getLong("document_id"), "chunkIndex", rs.getInt("chunk_index"))),
+                    args.toArray());
+        }
         //ILIKE '%query%'精确包含
         //similarity(content, query) > 0.1：模糊兜底，此方法对于中文基本无效，仅对于漏写字母，大小写错误等能正常识别
         return jdbc.query(
@@ -296,6 +328,33 @@ public class HybridSearchService {
                                 "documentId", rs.getLong("document_id"),
                         "chunkIndex", rs.getInt("chunk_index"))),
                 query, kbId, escapeLike(query), query, topK);
+    }
+
+    private static List<String> chineseBigrams(String query) {
+        List<String> terms = new ArrayList<>();
+        StringBuilder run = new StringBuilder();
+        query.codePoints().forEach(cp -> {
+            if (isHan(cp)) {
+                run.appendCodePoint(cp);
+            } else {
+                addBigrams(run, terms);
+                run.setLength(0);
+            }
+        });
+        addBigrams(run, terms);
+        return terms.stream().distinct().toList();
+    }
+
+    private static void addBigrams(StringBuilder run, List<String> terms) {
+        for (int i = 0; i + 1 < run.length(); i++) {
+            terms.add(run.substring(i, i + 2));
+        }
+        if (run.length() == 1) terms.add(run.toString());
+    }
+
+    private static boolean isHan(int cp) {
+        return (cp >= 0x3400 && cp <= 0x4dbf) || (cp >= 0x4e00 && cp <= 0x9fff)
+                || (cp >= 0xf900 && cp <= 0xfaff);
     }
 
     /**

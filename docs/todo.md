@@ -32,19 +32,19 @@
 
 ### 2.1 测试与工程质量
 
-- [ ] 为 `clientRequestId` 增加重复请求、并发插入和进行中状态重放测试。
-- [ ] 为登录失败锁定增加 Redis 可用、Redis 不可用、窗口过期和成功清理测试。
-- [ ] 为批量 chunk INSERT 增加空批次、跨批次失败重试和数据库回滚测试。
-- [ ] 为工具审计增加越权、参数校验、超时、队列拒绝和敏感字段脱敏测试。
-- [ ] 为锁租约增加续租失败、锁 token 变化和释放失败测试。
-- [ ] 为队列 gauge、缓存 modelVersion/dimension 隔离和流式 usage 增加断言。
+- [x] 为 `clientRequestId` 增加重复请求、并发插入和进行中状态重放测试。
+- [x] 为登录失败锁定增加 Redis 可用、Redis 不可用、窗口过期和成功清理测试。
+- [x] 为批量 chunk INSERT 增加空批次、跨批次失败重试和数据库回滚测试。
+- [x] 为工具审计增加越权、参数校验、超时、队列拒绝和敏感字段脱敏测试。
+- [x] 为锁租约增加续租失败、锁 token 变化和释放失败测试。
+- [x] 为队列 gauge、缓存 modelVersion/dimension 隔离和流式 usage 增加断言。
 
 ### 2.2 低风险运行保障
 
-- [ ] 为入库和 Agent 锁续租失败增加统一告警指标（当前已有日志告警）。
-- [ ] 为 Docker Compose 增加服务健康检查汇总命令，输出端口、容器状态和常见故障提示。
-- [ ] 为 API/AI/检索/工具指标补充统一的 `outcome` 枚举和命名说明。
-- [ ] 在 README 增加迁移脚本已执行、旧卷需要手动迁移和高位端口说明。
+- [x] 为入库和 Agent 锁续租失败增加统一告警指标（当前已有日志告警）。
+- [x] 为 Docker Compose 增加服务健康检查汇总命令，输出端口、容器状态和常见故障提示。
+- [x] 为 API/AI/检索/工具指标补充统一的 `outcome` 枚举和命名说明。
+- [x] README 已说明初始化脚本、旧卷手动迁移和高位端口；新增账本表时需执行 `006_ai_usage_ledger.sql`。
 
 ## 三、已确认并实现的轻量方案
 
@@ -215,11 +215,16 @@
 
 ### 4.1 真实 provider 与评测
 
-- [ ] 真实 tokenizer 与 provider usage 校准：中文、英文、代码、JSON、tool schema、多模型切换。
-- [ ] 真实 provider 成本账本：确认各模型价格、缓存 token 计费和价格生效规则。
+- [x] 真实 tokenizer 与 provider usage 校准（基础链路）：按中文/ASCII/代码/JSON 分段估算，并记录 provider 实际 usage 与估算值的 ratio/delta；tool schema 仍需真实 provider 样本校准。
+- [x] 真实 provider 成本账本（可对账骨架）：记录 provider/model、实际与估算 token、缓存 token、价格版本和币种；价格数值与生效规则由环境变量注入，待产品确认后填写。
 - [ ] 公开评测回归：准备 50-100 条真实知识库金标样本，比较 Hit@K/MRR、Faithfulness、Answer Correctness。
 - [ ] HyDE/Query Rewriting：在同一评测集上做 A/B，确认收益与额外成本后再接入。
-- [ ] 中文分词检索：比较 pg_trgm、zhparser/pg_jieba 和 OpenSearch，依据评测结果选型。
+- [x] 中文分词检索（零依赖基线）：中文查询使用二元切分召回并保留 ILIKE 精确命中；zhparser/pg_jieba/OpenSearch 的最终选型仍需真实评测后确认。
+
+**4.1 待确认选项**
+
+- 中文检索最终引擎：基于 D13（KEYWORD Hit@5/MRR=`0.010/0.010`，VECTOR=`1.000/0.955`）暂选 `B` PostgreSQL `zhparser/pg_jieba`，先验证 PG17 镜像兼容性；扩展不可维护或收益不足时转 `C` OpenSearch，`A` 二元切分保留为回退基线。
+- 价格账本规则：已选 `A`，继续使用 YAML/环境变量（发布即生效）；暂不引入数据库价格表，只有出现财务审计、历史账单重算或多实例统一变更需求时再升级 `B`。
 
 ### 4.2 分布式链路与可靠性
 

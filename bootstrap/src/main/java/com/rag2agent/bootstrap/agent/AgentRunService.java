@@ -177,9 +177,11 @@ public class AgentRunService {
                                 List.of(lockKey), lockToken, String.valueOf(SESSION_LOCK_TTL.toSeconds()));
                         if (!Long.valueOf(1L).equals(renewed)) {
                             log.warn("Agent 会话锁续租失败: userId={}, sessionId={}", userId, sessionId);
+                            recordLeaseRenewal(renewed);
                         }
                     } catch (RuntimeException exception) {
                         log.warn("Agent 会话锁续租异常: userId={}, sessionId={}", userId, sessionId, exception);
+                        recordLeaseRenewalError();
                     }
                 },
                 SESSION_LOCK_TTL.toSeconds() / 3, SESSION_LOCK_TTL.toSeconds() / 3, TimeUnit.SECONDS);
@@ -191,8 +193,26 @@ public class AgentRunService {
                 redis.execute(new DefaultRedisScript<>(UNLOCK_SCRIPT, Long.class), List.of(lockKey), lockToken);
             } catch (RuntimeException exception) {
                 log.warn("Agent 会话锁释放异常: userId={}, sessionId={}", userId, sessionId, exception);
+                recordLeaseReleaseError();
             }
         }
+    }
+
+    private void lockMetric(String operation, String outcome) {
+        meterRegistry.counter("rag2agent.lock.operations", "lock", "agent-session",
+                "operation", operation, "outcome", outcome).increment();
+    }
+
+    void recordLeaseRenewal(Long renewed) {
+        if (!Long.valueOf(1L).equals(renewed)) lockMetric("renew", "lost");
+    }
+
+    void recordLeaseRenewalError() {
+        lockMetric("renew", "error");
+    }
+
+    void recordLeaseReleaseError() {
+        lockMetric("release", "error");
     }
 
     /**
@@ -388,7 +408,8 @@ public class AgentRunService {
             long startMs = System.currentTimeMillis();
             List<ChatMessage> requestMessages = messages;
             if (tokenCostService != null) {
-                tokenCostService.recordEstimated(requestMessages, chatClient.providerName(), chatClient.modelName());
+                tokenCostService.recordEstimated(requestMessages, toolRegistry.toolDefs(),
+                        chatClient.providerName(), chatClient.modelName());
             }
             ChatCompletionResponse response;
             try {
@@ -420,7 +441,8 @@ public class AgentRunService {
             }
             recordLlmMetric(startMs, "success");
             if (response != null) {
-                recordTokens(response.usage(), chatClient.providerName(), chatClient.modelName());
+                recordTokens(response.usage(), requestMessages, toolRegistry.toolDefs(),
+                        chatClient.providerName(), chatClient.modelName());
             }
             recordLlmStep(runId, iteration, response, System.currentTimeMillis() - startMs);
 
@@ -499,7 +521,7 @@ public class AgentRunService {
                 throw new IllegalStateException("最大步数总结未返回有效答案");
             }
             recordLlmMetric(startMs, "success");
-            recordTokens(response.usage(), chatClient.providerName(), chatClient.modelName());
+            recordTokens(response.usage(), finalMessages, List.of(), chatClient.providerName(), chatClient.modelName());
             recordLlmStep(runId, maxIterations + 1, response, System.currentTimeMillis() - startMs);
             String answer = response.content().trim();
             updateAnswerAndStatus(runId, "MAX_STEPS_REACHED", answer);
@@ -669,12 +691,13 @@ public class AgentRunService {
                 .record(Duration.ofMillis(System.currentTimeMillis() - startedMs));
     }
 
-    private void recordTokens(Map<String, Object> usage, String provider, String model) {
+    private void recordTokens(Map<String, Object> usage, List<ChatMessage> messages,
+            List<com.rag2agent.infra.ai.model.ToolDef> tools, String provider, String model) {
         if (usage == null) {
             return;
         }
         if (tokenCostService != null) {
-            tokenCostService.record(usage, provider, model);
+            tokenCostService.record(usage, messages, tools, provider, model);
         }
         recordTokenType(usage, "prompt_tokens", "prompt", provider, model);
         recordTokenType(usage, "completion_tokens", "completion", provider, model);

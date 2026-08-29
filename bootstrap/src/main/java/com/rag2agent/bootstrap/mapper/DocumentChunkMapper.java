@@ -32,6 +32,10 @@ public interface DocumentChunkMapper {
             String metadata,
             int version) {}
 
+    default int insertChunks(List<ChunkRow> chunks) {
+        return chunks == null || chunks.isEmpty() ? 0 : insertChunksBatch(chunks);
+    }
+
     @Insert({
         "<script>",
         "INSERT INTO document_chunk",
@@ -43,7 +47,7 @@ public interface DocumentChunkMapper {
         "</foreach>",
         "</script>"
     })
-    int insertChunks(@Param("chunks") List<ChunkRow> chunks);
+    int insertChunksBatch(@Param("chunks") List<ChunkRow> chunks);
 
     @Insert("""
             INSERT INTO document_chunk

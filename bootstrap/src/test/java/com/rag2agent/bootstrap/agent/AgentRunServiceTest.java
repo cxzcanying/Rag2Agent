@@ -2,6 +2,10 @@ package com.rag2agent.bootstrap.agent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -10,12 +14,15 @@ import com.rag2agent.bootstrap.config.AgentProperties;
 import com.rag2agent.bootstrap.entity.AgentStep;
 import com.rag2agent.bootstrap.mapper.AgentRunMapper;
 import com.rag2agent.bootstrap.mapper.AgentStepMapper;
+import com.rag2agent.bootstrap.mapper.ToolCallRecordMapper;
+import com.rag2agent.bootstrap.entity.AgentRun;
 import com.rag2agent.infra.ai.client.ChatModelClient;
 import com.rag2agent.infra.ai.exception.AiClientException;
 import com.rag2agent.infra.ai.model.ChatCompletionRequest;
 import com.rag2agent.infra.ai.model.ChatCompletionResponse;
 import com.rag2agent.infra.ai.model.ChatMessage;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
@@ -23,10 +30,69 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.junit.jupiter.api.Test;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 
 class AgentRunServiceTest {
+
+    @Test
+    void clientRequestIdReplaysExistingRunWithoutCallingModel() {
+        AgentRun existing = new AgentRun();
+        existing.setId(41L);
+        existing.setUserId(7L);
+        existing.setStatus("COMPLETED");
+        existing.setAnswer("已完成");
+        AgentRunMapper runs = mock(AgentRunMapper.class);
+        when(runs.selectByClientRequest(7L, "request-1")).thenReturn(existing);
+        StringRedisTemplate redis = redisWithReferences();
+        AgentRunService service = serviceWith(runs, redis);
+
+        AgentExecutionResult result = service.start(7L, "session", "request-1", "问题", 3L, event -> {});
+
+        assertEquals(41L, result.runId());
+        assertEquals("COMPLETED", result.status());
+        org.mockito.Mockito.verify(runs, org.mockito.Mockito.never()).insert(any(AgentRun.class));
+    }
+
+    @Test
+    void duplicateInsertRereadsRunForConcurrentClientRequest() {
+        AgentRun existing = new AgentRun();
+        existing.setId(42L);
+        existing.setUserId(7L);
+        existing.setStatus("RUNNING");
+        AgentRunMapper runs = mock(AgentRunMapper.class);
+        when(runs.selectByClientRequest(7L, "request-2"))
+                .thenReturn(null)
+                .thenReturn(existing);
+        when(runs.insert(any(AgentRun.class))).thenThrow(new DuplicateKeyException("duplicate"));
+        AgentRunService service = serviceWith(runs, redisWithReferences());
+
+        AgentExecutionResult result = service.start(7L, "session", "request-2", "问题", 3L, event -> {});
+
+        assertEquals(42L, result.runId());
+        assertEquals("RUNNING", result.status());
+    }
+
+    @Test
+    void lockLeaseLossAndReleaseErrorsAreCounted() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        AgentRunService service = serviceWith(mock(AgentRunMapper.class), redisWithReferences(), registry);
+        service.recordLeaseRenewal(0L);
+        service.recordLeaseRenewalError();
+        service.recordLeaseReleaseError();
+        assertEquals(1.0, registry.get("rag2agent.lock.operations")
+                .tag("lock", "agent-session").tag("operation", "renew")
+                .tag("outcome", "lost").counter().count());
+        assertEquals(1.0, registry.get("rag2agent.lock.operations")
+                .tag("lock", "agent-session").tag("operation", "renew")
+                .tag("outcome", "error").counter().count());
+        assertEquals(1.0, registry.get("rag2agent.lock.operations")
+                .tag("lock", "agent-session").tag("operation", "release")
+                .tag("outcome", "error").counter().count());
+    }
 
     @Test
     void maxStepsForcesFinalAnswerWithoutTools() {
@@ -100,6 +166,34 @@ class AgentRunServiceTest {
                 ObservationRegistry.create(),
                 new AgentProperties(),
                 null);
+    }
+
+    private static AgentRunService serviceWith(AgentRunMapper runs, StringRedisTemplate redis) {
+        return serviceWith(runs, redis, new SimpleMeterRegistry());
+    }
+
+    private static AgentRunService serviceWith(
+            AgentRunMapper runs, StringRedisTemplate redis, MeterRegistry registry) {
+        AgentStepMapper steps = mock(AgentStepMapper.class);
+        ToolCallRecordMapper calls = mock(ToolCallRecordMapper.class);
+        when(calls.listByRunId(42L)).thenReturn(List.of());
+        com.rag2agent.bootstrap.service.KnowledgeBaseService knowledge = mock(
+                com.rag2agent.bootstrap.service.KnowledgeBaseService.class);
+        return new AgentRunService(
+                chatClient(request -> { throw new AssertionError("模型不应被调用"); }),
+                null, null, null, runs, steps, calls, new ObjectMapper(), redis,
+                registry, ObservationRegistry.create(), new AgentProperties(), knowledge);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static StringRedisTemplate redisWithReferences() {
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        ValueOperations<String, String> values = mock(ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(values);
+        when(values.setIfAbsent(any(String.class), any(String.class), any())).thenReturn(true);
+        when(values.get("agent:references:41")).thenReturn("[]");
+        when(values.get("agent:references:42")).thenReturn("[]");
+        return redis;
     }
 
     private static ChatModelClient chatClient(

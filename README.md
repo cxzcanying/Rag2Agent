@@ -60,7 +60,7 @@ $env:RAG2AGENT_MQ_ENABLED="true"
 mvn -pl bootstrap spring-boot:run
 ~~~
 
-`application.yml` 默认使用 `dev` profile，连接宿主机映射端口。首次启动会由 PostgreSQL 初始化脚本创建表；已有 PostgreSQL 数据卷需要手动执行 [003_evaluation.sql](docker/postgres/init/003_evaluation.sql) 才能启用评测表。
+`application.yml` 默认使用 `dev` profile，连接宿主机映射端口。首次启动会由 PostgreSQL 初始化脚本创建表；已有 PostgreSQL 数据卷需要手动按顺序执行未执行的初始化脚本（包括 [006_ai_usage_ledger.sql](docker/postgres/init/006_ai_usage_ledger.sql)）。初始化脚本只会在新卷首次启动时自动执行；复用旧卷时请检查并手动补跑缺失迁移脚本。
 
 V2 已落地能力与面试用未来演进路线见 [docs/interview-evolution.md](docs/interview-evolution.md)。
 
@@ -89,6 +89,13 @@ Vite 开发服务器会将 `/api` 代理到 `http://localhost:18080`。启动后
 | Jaeger | 16686、4317、4318 | UI / OTLP gRPC / OTLP HTTP |
 
 项目刻意使用高位端口，避免 Windows 动态保留端口导致“端口占用但查不到进程”。端口和中间件注意事项见 [docs/pitfalls-and-verification.md](docs/pitfalls-and-verification.md)。
+
+Compose 服务健康检查：
+
+~~~powershell
+pwsh ./scripts/compose-health.ps1       # Demo profile
+pwsh ./scripts/compose-health.ps1 -Full # 包含 RocketMQ、Neo4j、Jaeger
+~~~
 
 ## 配置与安全
 
@@ -226,7 +233,7 @@ mvn -pl rag-core -am test -Dtest=RealPdfVerifyIT
 
 以下内容已记录在 [docs/todo.md](docs/todo.md)，README 不把它们当作已交付能力：
 
-- 真实 tokenizer、provider usage 对账、流式 usage 解析和按用户/知识库 Token 配额尚未完成；当前上下文预算仍包含保守估算。
+- 已接入 provider usage 与估算 token 校准指标、AI usage 账本（含缓存 token/价格版本字段）和中文二元切分检索基线；真实 provider 样本、价格数值及 zhparser/pg_jieba/OpenSearch 最终选型仍需环境验收。
 - SSE 多行事件、半包和断线重连协议尚未完成；当前 SSE 适合本地演示，不应假设断线后自动续传。
 - Agent 已有同一 session 的并发锁、最大步数降级和完整工具审计，但 `clientRequestId` 级别的完成后幂等与长任务锁租约续期仍待补齐。
 - 现有 ACL 是 owner-only，不是带共享、协作组、只读/可写/管理员角色的多租户模型；输入防御、资源配额和队列积压治理也仍在 TODO。
@@ -240,6 +247,7 @@ mvn -pl rag-core -am test -Dtest=RealPdfVerifyIT
 - [docs/tech-selection.md](docs/tech-selection.md)：技术选型、模块边界、配置和演进路线
 - [docs/development-plan.md](docs/development-plan.md)：阶段计划与实际落地状态
 - [docs/pitfalls-and-verification.md](docs/pitfalls-and-verification.md)：端口、中间件和真实验收翻车记录
+- [docs/observability.md](docs/observability.md)：指标命名、标签和 `outcome` 枚举约定
 - [docs/todo.md](docs/todo.md)：按优先级维护的工程问题、风险和后续任务
 - [docs/evaluation-checklist.md](docs/evaluation-checklist.md)：评测数据集、指标和可复现实验入口
 

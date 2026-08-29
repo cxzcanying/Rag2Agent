@@ -99,11 +99,19 @@ rag2agent:
     cost:
       prices:
         deepseek/deepseek-v4-flash:
+          version: ${DEEPSEEK_FLASH_PRICE_VERSION:yaml-2026-08}
+          currency: ${DEEPSEEK_PRICE_CURRENCY:CNY}
           prompt-per-million: ${DEEPSEEK_FLASH_PROMPT_PRICE:0}
           completion-per-million: ${DEEPSEEK_FLASH_COMPLETION_PRICE:0}
+          cache-read-per-million: ${DEEPSEEK_FLASH_CACHE_READ_PRICE:0}
+          cache-write-per-million: ${DEEPSEEK_FLASH_CACHE_WRITE_PRICE:0}
         deepseek/deepseek-v4-pro:
+          version: ${DEEPSEEK_PRO_PRICE_VERSION:yaml-2026-08}
+          currency: ${DEEPSEEK_PRICE_CURRENCY:CNY}
           prompt-per-million: ${DEEPSEEK_PRO_PROMPT_PRICE:0}
           completion-per-million: ${DEEPSEEK_PRO_COMPLETION_PRICE:0}
+          cache-read-per-million: ${DEEPSEEK_PRO_CACHE_READ_PRICE:0}
+          cache-write-per-million: ${DEEPSEEK_PRO_CACHE_WRITE_PRICE:0}
     active-chat-provider: ${RAG2AGENT_ACTIVE_CHAT_PROVIDER:deepseek}
     active-embedding-provider: ${RAG2AGENT_ACTIVE_EMBEDDING_PROVIDER:siliconflow}
     active-rerank-provider: ${RAG2AGENT_ACTIVE_RERANK_PROVIDER:siliconflow}
