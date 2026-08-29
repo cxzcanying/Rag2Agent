@@ -14,7 +14,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
     AgentProperties.class,
     RateLimitProperties.class,
     EmbeddingCacheProperties.class,
-    RetrievalProperties.class
+    RetrievalProperties.class,
+    TokenCostProperties.class
 })
 public class BootstrapConfiguration {
 

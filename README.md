@@ -50,11 +50,19 @@ RAG2Agent 是一个面向企业知识库问答和 Agent 工作流的 Java + Vue 
 ~~~powershell
 Copy-Item -LiteralPath .env.example -Destination .env
 # 编辑 .env，至少填写 DEEPSEEK_API_KEY 和 SILICONFLOW_API_KEY
+# Demo：PostgreSQL + Redis + MinIO（默认）
+$env:RAG2AGENT_MQ_ENABLED="false"
 docker compose up -d
+# 完整 V2：追加 RocketMQ、Neo4j、Jaeger
+docker compose --profile full up -d
+# 完整异步入库需开启 RocketMQ（PowerShell）
+$env:RAG2AGENT_MQ_ENABLED="true"
 mvn -pl bootstrap spring-boot:run
 ~~~
 
 `application.yml` 默认使用 `dev` profile，连接宿主机映射端口。首次启动会由 PostgreSQL 初始化脚本创建表；已有 PostgreSQL 数据卷需要手动执行 [003_evaluation.sql](docker/postgres/init/003_evaluation.sql) 才能启用评测表。
+
+V2 已落地能力与面试用未来演进路线见 [docs/interview-evolution.md](docs/interview-evolution.md)。
 
 ### 前端
 

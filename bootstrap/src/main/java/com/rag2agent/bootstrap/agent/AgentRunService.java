@@ -13,6 +13,7 @@ import com.rag2agent.bootstrap.mapper.AgentStepMapper;
 import com.rag2agent.bootstrap.mapper.ToolCallRecordMapper;
 import com.rag2agent.bootstrap.service.HybridSearchService;
 import com.rag2agent.bootstrap.service.KnowledgeBaseService;
+import com.rag2agent.bootstrap.service.TokenCostService;
 import com.rag2agent.bootstrap.tool.ToolExecutor;
 import com.rag2agent.bootstrap.tool.ToolRegistry;
 import com.rag2agent.framework.common.ErrorCode;
@@ -40,6 +41,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.regex.Pattern;
 import org.springframework.dao.DuplicateKeyException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -79,6 +81,8 @@ public class AgentRunService {
             如果检索结果不足以回答，如实说明"未找到相关资料"，不要编造。
             当用户要求删除文档时，即使检索结果为空也要调用 delete_document 工具；该操作需要人工审批。
             """;
+    private static final Pattern PROMPT_INJECTION_PATTERN = Pattern.compile(
+            "(?i)(忽略(?:所有|之前)?指令|system prompt|系统提示|泄露(?:密钥|提示)|show (?:the )?prompt)");
 
     private final ChatModelClient chatClient;
     private final HybridSearchService searchService;
@@ -94,7 +98,9 @@ public class AgentRunService {
     private final AgentProperties agentProperties;
     private final ContextCompactor contextCompactor;
     private final KnowledgeBaseService knowledgeBaseService;
+    private final TokenCostService tokenCostService;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public AgentRunService(
             ChatModelClient chatClient,
             HybridSearchService searchService,
@@ -108,7 +114,8 @@ public class AgentRunService {
             MeterRegistry meterRegistry,
             ObservationRegistry observationRegistry,
             AgentProperties agentProperties,
-            KnowledgeBaseService knowledgeBaseService) {
+            KnowledgeBaseService knowledgeBaseService,
+            TokenCostService tokenCostService) {
         this.chatClient = chatClient;
         this.searchService = searchService;
         this.toolRegistry = toolRegistry;
@@ -123,6 +130,18 @@ public class AgentRunService {
         this.agentProperties = agentProperties;
         this.contextCompactor = new ContextCompactor(agentProperties.getSummaryMaxChars());
         this.knowledgeBaseService = knowledgeBaseService;
+        this.tokenCostService = tokenCostService;
+    }
+
+    public AgentRunService(
+            ChatModelClient chatClient, HybridSearchService searchService, ToolRegistry toolRegistry,
+            ToolExecutor toolExecutor, AgentRunMapper runMapper, AgentStepMapper stepMapper,
+            ToolCallRecordMapper toolCallMapper, ObjectMapper objectMapper, StringRedisTemplate redis,
+            MeterRegistry meterRegistry, ObservationRegistry observationRegistry,
+            AgentProperties agentProperties, KnowledgeBaseService knowledgeBaseService) {
+        this(chatClient, searchService, toolRegistry, toolExecutor, runMapper, stepMapper, toolCallMapper,
+                objectMapper, redis, meterRegistry, observationRegistry, agentProperties,
+                knowledgeBaseService, null);
     }
 
     /**
@@ -217,6 +236,10 @@ public class AgentRunService {
                 return existingResult(existing);
             }
         }
+        if (PROMPT_INJECTION_PATTERN.matcher(query).find()) {
+            meterRegistry.counter("rag2agent.security.prompt_injection", "outcome", "flagged").increment();
+            onEvent.accept(new AgentEvent("security", Map.of("risk", "prompt_injection_flagged")));
+        }
         AgentRun run = new AgentRun();
         run.setSessionId(sessionId);
         run.setClientRequestId(clientRequestId);
@@ -233,6 +256,7 @@ public class AgentRunService {
             }
             throw exception;
         }
+        onEvent.accept(new AgentEvent("run", Map.of("runId", run.getId())));
 
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(new ChatMessage("system", SYSTEM_PROMPT));
@@ -363,6 +387,9 @@ public class AgentRunService {
             }
             long startMs = System.currentTimeMillis();
             List<ChatMessage> requestMessages = messages;
+            if (tokenCostService != null) {
+                tokenCostService.recordEstimated(requestMessages, chatClient.providerName(), chatClient.modelName());
+            }
             ChatCompletionResponse response;
             try {
                 response = Observation.createNotStarted("rag2agent.agent.llm", observationRegistry)
@@ -593,7 +620,26 @@ public class AgentRunService {
 
     private AgentExecutionResult existingResult(AgentRun run) {
         List<Reference> references = loadReferences(run.getId());
-        return new AgentExecutionResult(run.getId(), run.getStatus(), run.getAnswer(), references, null);
+        Long pendingToolCallId = null;
+        if ("WAITING_APPROVAL".equals(run.getStatus()) && toolCallMapper != null) {
+            pendingToolCallId = toolCallMapper.listByRunId(run.getId()).stream()
+                    .filter(call -> "WAITING_APPROVAL".equals(call.getStatus()))
+                    .map(ToolCallRecord::getId)
+                    .findFirst()
+                    .orElse(null);
+        }
+        return new AgentExecutionResult(run.getId(), run.getStatus(), run.getAnswer(), references, pendingToolCallId);
+    }
+
+    public AgentExecutionResult getRun(Long userId, Long runId) {
+        if (userId == null || runId == null || runId <= 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "runId 无效");
+        }
+        AgentRun run = runMapper.selectById(runId);
+        if (run == null || !userId.equals(run.getUserId())) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "Agent 执行不存在");
+        }
+        return existingResult(run);
     }
 
     private static String normalizeInput(String input) {
@@ -626,6 +672,9 @@ public class AgentRunService {
     private void recordTokens(Map<String, Object> usage, String provider, String model) {
         if (usage == null) {
             return;
+        }
+        if (tokenCostService != null) {
+            tokenCostService.record(usage, provider, model);
         }
         recordTokenType(usage, "prompt_tokens", "prompt", provider, model);
         recordTokenType(usage, "completion_tokens", "completion", provider, model);

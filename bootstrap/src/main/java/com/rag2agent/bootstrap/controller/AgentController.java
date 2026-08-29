@@ -20,6 +20,7 @@ import io.micrometer.tracing.Tracer;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -85,6 +86,11 @@ public class AgentController {
             @PathVariable Long runId, @RequestBody ApprovalRequest request) {
         AgentExecutionResult result = agentRunService.approve(runId, request.approved(), event -> {});
         return ApiResponse.success(result);
+    }
+
+    @GetMapping("/agent/runs/{runId}")
+    public ApiResponse<AgentExecutionResult> getRun(@PathVariable Long runId) {
+        return ApiResponse.success(agentRunService.getRun(StpUtil.getLoginIdAsLong(), runId));
     }
 
     private void sendEvent(PrintWriter writer, AgentEvent event) {

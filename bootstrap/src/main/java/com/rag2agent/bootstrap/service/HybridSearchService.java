@@ -1,6 +1,8 @@
 package com.rag2agent.bootstrap.service;
 
 import com.rag2agent.bootstrap.config.RetrievalProperties;
+import com.rag2agent.framework.common.ErrorCode;
+import com.rag2agent.framework.exception.BusinessException;
 import com.rag2agent.infra.ai.client.EmbeddingClient;
 import com.rag2agent.infra.ai.client.RerankClient;
 import com.rag2agent.infra.ai.model.EmbeddingRequest;
@@ -25,6 +27,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeoutException;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -114,20 +117,27 @@ public class HybridSearchService {
         Route route = Observation.createNotStarted("rag2agent.search.route", observationRegistry)
                 .lowCardinalityKeyValue("strategy", metricStrategy(options))
                 .observe(() -> resolveRoute(options.strategy(), query));
-        CompletableFuture<List<RetrievalResult>> vectorFuture = route != Route.KEYWORD
+        CompletableFuture<List<RetrievalResult>> vectorFuture;
+        CompletableFuture<List<RetrievalResult>> keywordFuture;
+        try {
+            vectorFuture = route != Route.KEYWORD
                 ? CompletableFuture.supplyAsync(
                         () -> Observation.createNotStarted("rag2agent.search.vector", observationRegistry)
                                 .lowCardinalityKeyValue("route", route.name().toLowerCase(Locale.ROOT))
                                 .observe(() -> vectorSearch(kbId, embedQuery(query), options.candidateTopK())),
                         retrievalTaskExecutor)
                 : CompletableFuture.completedFuture(List.of());
-        CompletableFuture<List<RetrievalResult>> keywordFuture = route != Route.SEMANTIC
+            keywordFuture = route != Route.SEMANTIC
                 ? CompletableFuture.supplyAsync(
                         () -> Observation.createNotStarted("rag2agent.search.keyword", observationRegistry)
                                 .lowCardinalityKeyValue("route", route.name().toLowerCase(Locale.ROOT))
                                 .observe(() -> keywordSearch(kbId, query, options.candidateTopK())),
                         retrievalTaskExecutor)
                 : CompletableFuture.completedFuture(List.of());
+        } catch (RejectedExecutionException exception) {
+            meterRegistry.counter("rag2agent.search.retrieval.rejected").increment();
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "检索服务繁忙，请稍后重试");
+        }
         // 两路召回互不依赖，受控并行后统一等待；超时只降级掉未完成分支，其他异常仍向上抛出。
         List<List<RetrievalResult>> parallelResults = awaitParallel(vectorFuture, keywordFuture);
         List<RetrievalResult> vectorResults = parallelResults.get(0);

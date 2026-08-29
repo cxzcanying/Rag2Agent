@@ -17,6 +17,7 @@ import org.apache.rocketmq.common.message.Message;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.ObjectProvider;
 
 /**
  * 状态机消息服务
@@ -31,16 +32,19 @@ public class IngestMessageService {
     private final ObservationRegistry observationRegistry;
     private final Tracer tracer;
     private final ObjectMapper objectMapper;
+    private final IngestPipelineService pipelineService;
 
     public IngestMessageService(
-            DefaultMQProducer producer,
+            ObjectProvider<DefaultMQProducer> producer,
             ObservationRegistry observationRegistry,
             Tracer tracer,
-            ObjectMapper objectMapper) {
-        this.producer = producer;
+            ObjectMapper objectMapper,
+            IngestPipelineService pipelineService) {
+        this.producer = producer.getIfAvailable();
         this.observationRegistry = observationRegistry;
         this.tracer = tracer;
         this.objectMapper = objectMapper;
+        this.pipelineService = pipelineService;
     }
 
     public void sendIngestTask(Long documentId) {
@@ -48,6 +52,11 @@ public class IngestMessageService {
     }
 
     public void sendIngestTask(Long documentId, Long taskId) {
+        if (producer == null) {
+            // Demo 拓扑不启动 RocketMQ，沿用同一条 Pipeline 保证上传后仍能完成入库。
+            pipelineService.process(documentId, taskId);
+            return;
+        }
         try {
             Span currentSpan = tracer.currentSpan();
             String traceId = currentSpan == null ? "" : currentSpan.context().traceId();

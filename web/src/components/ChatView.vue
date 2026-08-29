@@ -52,15 +52,57 @@ async function send() {
   processStage.value = '正在处理你的问题...'
 
   try {
-    await agent.chat({ kbId: Number(kbId.value), query: q }, (event) => handleEvent(assistant, event))
+    await agent.chat({
+      kbId: Number(kbId.value),
+      query: q,
+      clientRequestId: crypto.randomUUID()
+    }, (event) => handleEvent(assistant, event))
+    if (assistant.runId && !assistant.content && !pendingApproval.value) {
+      processStage.value = '连接已中断，正在恢复任务状态...'
+      await recoverRun(assistant.runId, assistant)
+    }
   } catch (e) {
-    assistant.content = '请求失败：' + e.message
+    if (assistant.runId) {
+      processStage.value = '连接已中断，正在恢复任务状态...'
+      await recoverRun(assistant.runId, assistant)
+    } else {
+      assistant.content = '请求失败：' + e.message
+    }
   } finally {
     sending.value = false
     if (!processStage.value) {
       processStage.value = ''
     }
   }
+}
+
+async function recoverRun(runId, assistant) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const result = await agent.getRun(runId)
+    if (result.status === 'COMPLETED' || result.status === 'DEGRADED' || result.status === 'MAX_STEPS_REACHED') {
+      assistant.content = result.answer || ''
+      assistant.references = result.references || assistant.references
+      processStage.value = ''
+      return
+    }
+    if (result.status === 'FAILED') {
+      assistant.content = '请求执行失败'
+      processStage.value = ''
+      return
+    }
+    if (result.status === 'WAITING_APPROVAL' && result.pendingApprovalToolCallId) {
+      pendingApproval.value = {
+        runId,
+        toolCallId: result.pendingApprovalToolCallId,
+        toolName: '待审批工具操作',
+        arguments: ''
+      }
+      processStage.value = ''
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 800))
+  }
+  processStage.value = '任务仍在后台执行，可稍后重试查看结果'
 }
 
 function handleEvent(msg, event) {
@@ -71,6 +113,9 @@ function handleEvent(msg, event) {
       break
     case 'trace':
       msg.traceId = event.data?.traceId || null
+      break
+    case 'run':
+      msg.runId = event.data?.runId || null
       break
     case 'reference':
       msg.references = event.data || []

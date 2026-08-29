@@ -1,10 +1,16 @@
 package com.rag2agent.bootstrap.controller;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.dto.DocumentDtos.DocumentView;
 import com.rag2agent.bootstrap.dto.DocumentDtos.PresignResponse;
 import com.rag2agent.bootstrap.service.DocumentService;
+import com.rag2agent.bootstrap.service.IdempotencyService;
 import com.rag2agent.framework.common.ApiResponse;
 import java.util.List;
+import java.util.Map;
+import java.io.InputStream;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -19,15 +25,47 @@ import cn.dev33.satoken.stp.StpUtil;
 public class DocumentController {
 
     private final DocumentService documentService;
+    private final IdempotencyService idempotency;
+    private final ObjectMapper objectMapper;
 
-    public DocumentController(DocumentService documentService) {
+    public DocumentController(DocumentService documentService, IdempotencyService idempotency, ObjectMapper objectMapper) {
         this.documentService = documentService;
+        this.idempotency = idempotency;
+        this.objectMapper = objectMapper;
     }
 
     @PostMapping("/upload")
     public ApiResponse<DocumentView> upload(
-            @RequestParam("file") MultipartFile file, @RequestParam("kbId") Long kbId) {
-        return ApiResponse.success(documentService.upload(StpUtil.getLoginIdAsLong(), kbId, file));
+            @RequestParam("file") MultipartFile file, @RequestParam("kbId") Long kbId,
+            @org.springframework.web.bind.annotation.RequestHeader(value = "Idempotency-Key", required = false) String key) {
+        Long userId = StpUtil.getLoginIdAsLong();
+        Map<String, Object> request = Map.of("kbId", String.valueOf(kbId), "name", file == null ? "" : String.valueOf(file.getOriginalFilename()),
+                "size", file == null ? 0 : file.getSize(), "sha256", checksum(file));
+        String cached = idempotency.reserve(userId, "document:upload", key, request);
+        if (cached != null) {
+            try { return ApiResponse.success(objectMapper.readValue(cached, DocumentView.class)); }
+            catch (Exception exception) { throw new IllegalStateException("幂等响应读取失败", exception); }
+        }
+        try {
+            DocumentView result = documentService.upload(userId, kbId, file);
+            idempotency.complete(userId, "document:upload", key, result);
+            return ApiResponse.success(result);
+        } catch (RuntimeException exception) {
+            idempotency.release(userId, "document:upload", key);
+            throw exception;
+        }
+    }
+
+    private String checksum(MultipartFile file) {
+        if (file == null) return "";
+        try (InputStream input = file.getInputStream()) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            input.transferTo(new java.security.DigestOutputStream(java.io.OutputStream.nullOutputStream(), digest));
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (Exception exception) {
+            throw new com.rag2agent.framework.exception.BusinessException(
+                    com.rag2agent.framework.common.ErrorCode.BAD_REQUEST, "文件指纹计算失败");
+        }
     }
 
     @GetMapping

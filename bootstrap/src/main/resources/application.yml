@@ -62,6 +62,8 @@ sa-token:
   is-log: false
 
 rag2agent:
+  ingest:
+    rocketmq-enabled: ${RAG2AGENT_MQ_ENABLED:false}
   search:
     parallel-timeout-millis: ${RAG2AGENT_SEARCH_PARALLEL_TIMEOUT_MILLIS:10000}
   cache:
@@ -94,6 +96,14 @@ rag2agent:
       - mcp-server
       - bootstrap
   ai:
+    cost:
+      prices:
+        deepseek/deepseek-v4-flash:
+          prompt-per-million: ${DEEPSEEK_FLASH_PROMPT_PRICE:0}
+          completion-per-million: ${DEEPSEEK_FLASH_COMPLETION_PRICE:0}
+        deepseek/deepseek-v4-pro:
+          prompt-per-million: ${DEEPSEEK_PRO_PROMPT_PRICE:0}
+          completion-per-million: ${DEEPSEEK_PRO_COMPLETION_PRICE:0}
     active-chat-provider: ${RAG2AGENT_ACTIVE_CHAT_PROVIDER:deepseek}
     active-embedding-provider: ${RAG2AGENT_ACTIVE_EMBEDDING_PROVIDER:siliconflow}
     active-rerank-provider: ${RAG2AGENT_ACTIVE_RERANK_PROVIDER:siliconflow}

@@ -17,12 +17,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 /**
  * RocketMQ 消费者配置
  * @author 21311
  */
 @Configuration
+@ConditionalOnProperty(name = "rag2agent.ingest.rocketmq-enabled", havingValue = "true")
 public class RocketMqConsumerConfig {
 
     private static final Logger log = LoggerFactory.getLogger(RocketMqConsumerConfig.class);

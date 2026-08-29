@@ -26,16 +26,18 @@ export const auth = {
 }
 
 export const knowledgeBases = {
-  create: (body) => request('/knowledge-bases', { method: 'POST', body: JSON.stringify(body) }),
+  create: (body, idempotencyKey = crypto.randomUUID()) => request('/knowledge-bases', {
+    method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(body)
+  }),
   list: () => request('/knowledge-bases')
 }
 
 export const documents = {
-  upload: (file, kbId) => {
+  upload: (file, kbId, idempotencyKey = crypto.randomUUID()) => {
     const fd = new FormData()
     fd.append('file', file)
     fd.append('kbId', String(kbId))
-    return request('/documents/upload', { method: 'POST', body: fd })
+    return request('/documents/upload', { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: fd })
   },
   list: (kbId) => request('/documents?kbId=' + kbId),
   presign: (id) => request('/documents/' + id + '/presign')
@@ -67,7 +69,8 @@ export const agent = {
           const data = trimmed.slice(5).trim()
           if (data && data !== '[DONE]') {
             try {
-              onEvent(JSON.parse(data))
+              const event = JSON.parse(data)
+              onEvent(event)
             } catch {
               // 忽略无法解析的分片
             }
@@ -76,6 +79,7 @@ export const agent = {
       }
     }
   },
+  getRun: (runId) => request('/agent/runs/' + runId),
   approve: (runId, approved) =>
     request('/agent/approvals/' + runId, { method: 'POST', body: JSON.stringify({ approved }) })
 }
