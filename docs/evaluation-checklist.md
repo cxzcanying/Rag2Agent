@@ -23,6 +23,8 @@
 - 候选：zhparser / pg_jieba 分词 + tsvector/ts_rank；备选 OpenSearch
 - 指标：关键词路单独 Hit@k/MRR，与基线 A/B 对比
 - 出处：tech-selection 第 6/4 节 + 翻车文档坑 3 + todo.md
+- 当前决策：优先 `zhparser`。`pgvector/pg17` 默认镜像不含该扩展，仓库提供 `docker/postgres/Dockerfile` 自定义镜像；扩展不可维护或 A/B 无明显收益时转 OpenSearch。
+- 验收命令：构建 `rag2agent-postgres:pg17-zhparser` 后设置 `RAG2AGENT_POSTGRES_IMAGE`，执行同一 MIRACL 子集的 `KEYWORD`/`HYBRID` 矩阵；记录扩展版本、Hit@5、MRR、P95 查询耗时和镜像构建耗时。
 
 ### 4. Rerank 分数阈值
 - 基线：无阈值，低分（如 0.0045）也会被返回
@@ -123,8 +125,10 @@
 | 5 | VECTOR | 开 | 100 | 1.000 | 0.955 | COMPLETED |
 | 6 | KEYWORD | 关 | 100 | 0.010 | 0.010 | COMPLETED |
 | 7 | AUTO | 开 | 100 | 0.660 | 0.630 | COMPLETED |
+| 15 | KEYWORD + zhparser | 关 | 100 | 0.190 | 0.180 | COMPLETED |
+| 16 | HYBRID + zhparser | 关 | 100 | 1.000 | 0.912 | COMPLETED |
 
-结论：当前公开子集上 VECTOR 明显优于 `pg_trgm` 中文关键词路；AUTO 受规则路由影响，部分短问句未走向量路。该结果支持 TODO 中引入中文分词或独立搜索引擎的方向，但不应外推为完整 MIRACL 的最终结论。
+结论：`zhparser` 显著改善了中文关键词召回，`KEYWORD` Hit@5/MRR 从 `0.010/0.010` 提升到 `0.190/0.180`；`HYBRID` 达到 `1.000/0.912`，未低于原有向量/混合检索基线。该结果仅代表固定的 100 条 MIRACL 子集，不外推为完整 MIRACL 结论。
 
 ### MIRACL zh 参数与重排补充对比
 
@@ -144,7 +148,7 @@
 - VECTOR 在本子集上 Hit@5 稳定为 1.000；关闭 Rerank 只使 MRR 从 0.955 降到 0.950，Rerank 的收益主要体现在排序而非召回。
 - `rrfK=20` 没有优于基线 `rrfK=60`，`rrfK=100` 与扩大 `candidateTopK=50` 的结果相同；当前没有证据支持调整默认值。
 - AUTO 的瓶颈仍是规则路由，关闭 Rerank 后 Hit@5 不变、MRR 略升；KEYWORD 开启 Rerank 也没有改善中文召回，说明问题在召回而非精排。
-- 当前评测接口没有暴露切块参数，且已入库文档不能在同一知识库中安全切换 chunk 配置；`chunkSize/overlap`、PDF 文本规范化、HyDE 和中文分词 A/B 仍未完成，不能宣称 D13 覆盖了全部候选优化。
+- 当前评测接口没有暴露切块参数，且已入库文档不能在同一知识库中安全切换 chunk 配置；`chunkSize/overlap`、PDF 文本规范化和 HyDE 仍未完成，不能宣称 D13 覆盖了全部候选优化。中文分词 A/B 已由 Run 15/16 完成。
 
 ### DuReader Robust 生成质量
 

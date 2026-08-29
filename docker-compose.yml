@@ -2,7 +2,7 @@ name: rag2agent
 
 services:
   postgres:
-    image: pgvector/pgvector:pg17
+    image: ${RAG2AGENT_POSTGRES_IMAGE:-pgvector/pgvector:pg17}
     container_name: rag2agent-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-rag2agent}

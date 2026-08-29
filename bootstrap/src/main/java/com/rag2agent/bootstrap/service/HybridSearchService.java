@@ -31,6 +31,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeoutException;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -278,6 +279,17 @@ public class HybridSearchService {
     private List<RetrievalResult> keywordSearch(Long kbId, String query, int topK) {
         List<String> hanTerms = chineseBigrams(query);
         if (!hanTerms.isEmpty()) {
+            if (!"bigram".equals(retrievalProperties.getChineseSearchMode())) {
+                try {
+                    return zhparserKeywordSearch(kbId, query, topK);
+                } catch (DataAccessException exception) {
+                    if ("zhparser".equals(retrievalProperties.getChineseSearchMode())) {
+                        throw exception;
+                    }
+                    meterRegistry.counter("rag2agent.search.chinese.fallback", "reason", "zhparser_unavailable")
+                            .increment();
+                }
+            }
             // ponytail: 二元切分是零依赖兜底，无法替代 zhparser/pg_jieba；真实评测后再切换引擎。
             String score = hanTerms.stream()
                     .map(term -> "CASE WHEN c.content ILIKE '%' || ? || '%' THEN 1 ELSE 0 END")
@@ -328,6 +340,24 @@ public class HybridSearchService {
                                 "documentId", rs.getLong("document_id"),
                         "chunkIndex", rs.getInt("chunk_index"))),
                 query, kbId, escapeLike(query), query, topK);
+    }
+
+    private List<RetrievalResult> zhparserKeywordSearch(Long kbId, String query, int topK) {
+        return jdbc.query(
+                """
+                SELECT c.id, c.content, c.document_id, c.chunk_index,
+                       ts_rank_cd(c.content_zh_tsv, plainto_tsquery('rag2agent_zhcfg', ?)) AS score
+                FROM document_chunk c
+                JOIN document d ON d.id = c.document_id
+                WHERE c.kb_id = ? AND c.version = d.version
+                  AND c.content_zh_tsv @@ plainto_tsquery('rag2agent_zhcfg', ?)
+                ORDER BY score DESC
+                LIMIT ?
+                """,
+                (rs, rowNum) -> new RetrievalResult(
+                        rs.getString("id"), rs.getString("content"), rs.getDouble("score"),
+                        Map.of("documentId", rs.getLong("document_id"), "chunkIndex", rs.getInt("chunk_index"))),
+                query, kbId, query, topK);
     }
 
     private static List<String> chineseBigrams(String query) {

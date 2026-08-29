@@ -26,9 +26,9 @@
 
 D13 中文评测已证明当前 `pg_trgm` 关键词路是短板：MIRACL zh 100 条用例中，`KEYWORD` 的 Hit@5/MRR 均为 `0.010`，而 `VECTOR` 为 `1.000/0.955`；关闭或开启 rerank 对关键词召回没有实质改善，说明根因是分词/召回而不是精排。
 
-当前选择 PostgreSQL 分词扩展路线（B，优先验证 `zhparser/pg_jieba`），理由是数据规模仍小、主数据和权限过滤都在 PostgreSQL、无需新增索引同步链路。验收必须使用同一 MIRACL 子集和相同 topK/candidateTopK，至少比较关键词路单独 Hit@5/MRR、混合检索 Hit@5/MRR、查询延迟和镜像维护成本。若 PG17 扩展无法稳定构建，或指标提升不足，再转 OpenSearch（C）；二元切分（A）仅作为零依赖回退基线。
+当前已落地 PostgreSQL 分词扩展路线（B，`zhparser`）：数据规模仍小、主数据和权限过滤都在 PostgreSQL，无需新增索引同步链路。自定义镜像 `rag2agent-postgres:pg17-zhparser` 已构建成功，并在保留现有数据卷的前提下启用；同一 MIRACL zh 100 条子集、相同 topK/candidateTopK 下，`KEYWORD` Hit@5/MRR 从 `0.010/0.010` 提升到 `0.190/0.180`（Run 15），`HYBRID` 为 `1.000/0.912`（Run 16）。默认 Compose 仍使用官方 `pgvector/pg17`，通过 `RAG2AGENT_POSTGRES_IMAGE` 显式切换扩展镜像；二元切分（A）保留为零依赖回退基线。
 
-升级门槛：关键词路 Hit@5 至少明显高于当前 `0.010`，且混合检索不能低于现有 AUTO `0.660/0.630`；否则不接受“换了分词但没有收益”。
+验收结论：关键词路 Hit@5 已明显高于 `0.010`，混合检索 Hit@5=`1.000` 高于现有 AUTO `0.660`，因此接受 `zhparser` 作为当前中文关键词实现。后续只有在数据规模或运维边界变化时再评估 OpenSearch。
 
 ## 7. 提示注入防护
 

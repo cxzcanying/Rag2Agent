@@ -219,11 +219,12 @@
 - [x] 真实 provider 成本账本（可对账骨架）：记录 provider/model、实际与估算 token、缓存 token、价格版本和币种；价格数值与生效规则由环境变量注入，待产品确认后填写。
 - [ ] 公开评测回归：准备 50-100 条真实知识库金标样本，比较 Hit@K/MRR、Faithfulness、Answer Correctness。
 - [ ] HyDE/Query Rewriting：在同一评测集上做 A/B，确认收益与额外成本后再接入。
-- [x] 中文分词检索（零依赖基线）：中文查询使用二元切分召回并保留 ILIKE 精确命中；zhparser/pg_jieba/OpenSearch 的最终选型仍需真实评测后确认。
+- [x] 中文分词检索零依赖回退基线：中文查询使用二元切分召回并保留 ILIKE 精确命中。
+- [x] 中文分词最终实现：PG17 自定义镜像已构建并在现有数据卷上启用 `zhparser`；同一 MIRACL zh 100 条子集的 `KEYWORD` 从 `0.010/0.010` 提升到 `0.190/0.180`，`HYBRID` 达到 `1.000/0.912`（Run 15/16）。
 
-**4.1 待确认选项**
+**4.1 已确认选项与升级条件**
 
-- 中文检索最终引擎：基于 D13（KEYWORD Hit@5/MRR=`0.010/0.010`，VECTOR=`1.000/0.955`）暂选 `B` PostgreSQL `zhparser/pg_jieba`，先验证 PG17 镜像兼容性；扩展不可维护或收益不足时转 `C` OpenSearch，`A` 二元切分保留为回退基线。
+- 中文检索最终引擎：已确定 `B` PostgreSQL `zhparser`。自定义镜像 `rag2agent-postgres:pg17-zhparser` 已在 PG17 上构建成功，现有数据卷无损切换；同一 MIRACL 子集验证 `KEYWORD` Hit@5/MRR=`0.190/0.180`、`HYBRID`=`1.000/0.912`。默认镜像仍为 `pgvector/pg17`，通过 `RAG2AGENT_POSTGRES_IMAGE` 显式切换；`A` 二元切分保留为扩展不可用时的回退基线。
 - 价格账本规则：已选 `A`，继续使用 YAML/环境变量（发布即生效）；暂不引入数据库价格表，只有出现财务审计、历史账单重算或多实例统一变更需求时再升级 `B`。
 
 ### 4.2 分布式链路与可靠性

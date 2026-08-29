@@ -66,6 +66,7 @@ rag2agent:
     rocketmq-enabled: ${RAG2AGENT_MQ_ENABLED:false}
   search:
     parallel-timeout-millis: ${RAG2AGENT_SEARCH_PARALLEL_TIMEOUT_MILLIS:10000}
+    chinese-search-mode: ${RAG2AGENT_CHINESE_SEARCH_MODE:auto}
   cache:
     embedding:
       enabled: ${RAG2AGENT_EMBEDDING_CACHE_ENABLED:true}

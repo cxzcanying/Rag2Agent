@@ -62,6 +62,8 @@ mvn -pl bootstrap spring-boot:run
 
 `application.yml` 默认使用 `dev` profile，连接宿主机映射端口。首次启动会由 PostgreSQL 初始化脚本创建表；已有 PostgreSQL 数据卷需要手动按顺序执行未执行的初始化脚本（包括 [006_ai_usage_ledger.sql](docker/postgres/init/006_ai_usage_ledger.sql)）。初始化脚本只会在新卷首次启动时自动执行；复用旧卷时请检查并手动补跑缺失迁移脚本。
 
+中文关键词检索默认使用 `RAG2AGENT_CHINESE_SEARCH_MODE=auto`：检测到 `zhparser` 时走 PostgreSQL `tsvector`，否则回退二元切分。要启用 PG17 的 `zhparser` 镜像，先执行 `docker build -t rag2agent-postgres:pg17-zhparser docker/postgres`，再设置 `$env:RAG2AGENT_POSTGRES_IMAGE="rag2agent-postgres:pg17-zhparser"` 后启动 Compose；构建失败时继续使用默认 `pgvector/pg17` 即可。
+
 V2 已落地能力与面试用未来演进路线见 [docs/interview-evolution.md](docs/interview-evolution.md)。
 
 ### 前端
@@ -233,7 +235,7 @@ mvn -pl rag-core -am test -Dtest=RealPdfVerifyIT
 
 以下内容已记录在 [docs/todo.md](docs/todo.md)，README 不把它们当作已交付能力：
 
-- 已接入 provider usage 与估算 token 校准指标、AI usage 账本（含缓存 token/价格版本字段）和中文二元切分检索基线；真实 provider 样本、价格数值及 zhparser/pg_jieba/OpenSearch 最终选型仍需环境验收。
+- 已接入 provider usage 与估算 token 校准指标、AI usage 账本（含缓存 token/价格版本字段）和中文检索：默认无扩展时使用二元切分，启用 `rag2agent-postgres:pg17-zhparser` 后使用 `zhparser`；固定 MIRACL zh 子集验证了关键词和混合检索收益。真实价格数值仍按环境变量注入。
 - SSE 多行事件、半包和断线重连协议尚未完成；当前 SSE 适合本地演示，不应假设断线后自动续传。
 - Agent 已有同一 session 的并发锁、最大步数降级和完整工具审计，但 `clientRequestId` 级别的完成后幂等与长任务锁租约续期仍待补齐。
 - 现有 ACL 是 owner-only，不是带共享、协作组、只读/可写/管理员角色的多租户模型；输入防御、资源配额和队列积压治理也仍在 TODO。
