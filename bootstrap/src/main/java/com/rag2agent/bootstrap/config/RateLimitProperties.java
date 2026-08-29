@@ -13,6 +13,9 @@ public class RateLimitProperties {
     private boolean enabled = true;
     private int limit = 60;
     private int windowSeconds = 60;
+    private int loginFailureLimit = 5;
+    private int loginFailureWindowSeconds = 900;
+    private int loginLockSeconds = 900;
 
     public boolean isEnabled() {
         return enabled;
@@ -33,4 +36,11 @@ public class RateLimitProperties {
     public void setWindowSeconds(int windowSeconds) {
         this.windowSeconds = Math.max(1, windowSeconds);
     }
+
+    public int getLoginFailureLimit() { return loginFailureLimit; }
+    public void setLoginFailureLimit(int value) { loginFailureLimit = Math.max(1, value); }
+    public int getLoginFailureWindowSeconds() { return loginFailureWindowSeconds; }
+    public void setLoginFailureWindowSeconds(int value) { loginFailureWindowSeconds = Math.max(1, value); }
+    public int getLoginLockSeconds() { return loginLockSeconds; }
+    public void setLoginLockSeconds(int value) { loginLockSeconds = Math.max(1, value); }
 }

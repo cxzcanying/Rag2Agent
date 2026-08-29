@@ -101,34 +101,50 @@ public class OpenAiChatModelClient implements ChatModelClient {
 
     @Override
     public void stream(ChatCompletionRequest request, Consumer<String> onDelta) {
+        stream(request, onDelta, usage -> {});
+    }
+
+    @Override
+    public void stream(ChatCompletionRequest request, Consumer<String> onDelta,
+            Consumer<Map<String, Object>> onUsage) {
         try (Response response = post(buildBody(request, true))) {
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(response.body().byteStream(), StandardCharsets.UTF_8));
             String line;
+            StringBuilder eventData = new StringBuilder();
             while ((line = reader.readLine()) != null) {
-                /*
-                代码只认 data: 开头的行（line.startsWith("data:")），其他行跳过
-                 */
+                if (line.isEmpty()) {
+                    consumeEvent(eventData.toString(), onDelta, onUsage);
+                    eventData.setLength(0);
+                    continue;
+                }
                 if (!line.startsWith("data:")) {
                     continue;
                 }
-                String data = line.substring(5).trim();
-                /*
-                  响应是一行一行文本，格式固定：data: {json} 空行 data: {json} ... 最后 data: [DONE]。
-                 */
-                if (data.isEmpty() || data.equals("[DONE]")) {
-                    continue;
+                if (!eventData.isEmpty()) {
+                    eventData.append('\n');
                 }
-                JsonNode json = mapper.readTree(data);
-                //示例：{"choices":[{"delta":{"content":"你"},"finish_reason":null}]}只取content字段内容
-                //使用.path()而不是.get()的原因是按路径找子节点，找不到就返回一个特殊的缺失节点，不会抛NPE异常。
-                String delta = json.path("choices").path(0).path("delta").path("content").asText(null);
-                if (delta != null) {
-                    onDelta.accept(delta);
-                }
+                eventData.append(line.substring(5).stripLeading());
             }
+            consumeEvent(eventData.toString(), onDelta, onUsage);
         } catch (IOException e) {
             throw new AiClientException("Chat 流式调用失败: " + e.getMessage(), e);
+        }
+    }
+
+    private void consumeEvent(String data, Consumer<String> onDelta,
+            Consumer<Map<String, Object>> onUsage) throws IOException {
+        if (data == null || data.isBlank() || data.trim().equals("[DONE]")) {
+            return;
+        }
+        JsonNode json = mapper.readTree(data);
+        JsonNode usage = json.path("usage");
+        if (usage.isObject()) {
+            onUsage.accept(mapper.convertValue(usage, new TypeReference<Map<String, Object>>() {}));
+        }
+        String delta = json.path("choices").path(0).path("delta").path("content").asText(null);
+        if (delta != null) {
+            onDelta.accept(delta);
         }
     }
 
@@ -148,6 +164,10 @@ public class OpenAiChatModelClient implements ChatModelClient {
         //优先用请求里带的，没有就用配置的默认值
         root.put("model", request.model() == null || request.model().isBlank() ? defaultModel : request.model());
         root.put("stream", stream);
+        if (stream) {
+            ObjectNode streamOptions = root.putObject("stream_options");
+            streamOptions.put("include_usage", true);
+        }
 
         ArrayNode messages = root.putArray("messages");
         for (ChatMessage message : request.messages()) {

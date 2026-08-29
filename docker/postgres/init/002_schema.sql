@@ -75,13 +75,18 @@ CREATE TABLE IF NOT EXISTS ingest_task (
 CREATE TABLE IF NOT EXISTS agent_run (
     id             BIGSERIAL PRIMARY KEY,
     session_id     VARCHAR(64) NOT NULL,
+    client_request_id VARCHAR(128),
     user_id        BIGINT NOT NULL DEFAULT 0,
     status         VARCHAR(32) NOT NULL DEFAULT 'INIT',
     query          TEXT NOT NULL,
+    answer         TEXT,
     max_iterations INT NOT NULL DEFAULT 10,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_agent_run_client_request
+    ON agent_run(user_id, client_request_id) WHERE client_request_id IS NOT NULL;
 
 -- Agent 步骤（每步记录输入输出，用于轨迹审计与评测）
 CREATE TABLE IF NOT EXISTS agent_step (

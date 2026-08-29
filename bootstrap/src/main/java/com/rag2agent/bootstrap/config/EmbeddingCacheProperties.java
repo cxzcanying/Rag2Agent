@@ -10,6 +10,8 @@ public class EmbeddingCacheProperties {
     private boolean enabled = true;
     private int maxEntries = 10_000;
     private int ttlSeconds = 3_600;
+    private String modelVersion = "v1";
+    private int dimension = 1024;
 
     public boolean isEnabled() {
         return enabled;
@@ -29,5 +31,21 @@ public class EmbeddingCacheProperties {
 
     public void setTtlSeconds(int ttlSeconds) {
         this.ttlSeconds = Math.max(1, ttlSeconds);
+    }
+
+    public String getModelVersion() {
+        return modelVersion;
+    }
+
+    public void setModelVersion(String modelVersion) {
+        this.modelVersion = modelVersion == null || modelVersion.isBlank() ? "v1" : modelVersion;
+    }
+
+    public int getDimension() {
+        return dimension;
+    }
+
+    public void setDimension(int dimension) {
+        this.dimension = Math.max(1, dimension);
     }
 }

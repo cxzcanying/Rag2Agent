@@ -65,7 +65,7 @@ public class AgentController {
 
         try {
             agentRunService.start(
-                    userId, sessionId, request.query(), request.kbId(),
+                    userId, sessionId, request.clientRequestId(), request.query(), request.kbId(),
                     event -> sendEvent(writer, event));
         } catch (Exception e) {
             // 响应可能已部分提交，只能以 SSE 事件形式返回错误

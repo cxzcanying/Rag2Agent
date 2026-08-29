@@ -35,7 +35,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import org.springframework.dao.DuplicateKeyException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -60,6 +65,14 @@ public class AgentRunService {
     private static final String UNLOCK_SCRIPT =
             "if redis.call('get', KEYS[1]) == ARGV[1] then "
                     + "return redis.call('del', KEYS[1]) else return 0 end";
+    private static final String RENEW_SCRIPT =
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                    + "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end";
+    private static final ScheduledExecutorService LEASE_EXECUTOR = Executors.newScheduledThreadPool(1, task -> {
+        Thread thread = new Thread(task, "agent-lock-lease");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private static final String SYSTEM_PROMPT = """
             你是一个企业知识库问答助手。回答必须基于检索到的知识库内容，并标注引用编号（如 [1]）。
@@ -123,6 +136,12 @@ public class AgentRunService {
      */
     public AgentExecutionResult start(
             Long userId, String sessionId, String query, Long kbId, Consumer<AgentEvent> onEvent) {
+        return start(userId, sessionId, null, query, kbId, onEvent);
+    }
+
+    public AgentExecutionResult start(
+            Long userId, String sessionId, String clientRequestId, String query,
+            Long kbId, Consumer<AgentEvent> onEvent) {
         if (userId == null || userId <= 0 || sessionId == null
                 || sessionId.isBlank() || sessionId.length() > 64) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "用户或 sessionId 无效");
@@ -132,10 +151,28 @@ public class AgentRunService {
         if (!Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(lockKey, lockToken, SESSION_LOCK_TTL))) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "该会话已有请求正在执行，请稍后重试");
         }
+        ScheduledFuture<?> lease = LEASE_EXECUTOR.scheduleAtFixedRate(
+                () -> {
+                    try {
+                        Long renewed = redis.execute(new DefaultRedisScript<>(RENEW_SCRIPT, Long.class),
+                                List.of(lockKey), lockToken, String.valueOf(SESSION_LOCK_TTL.toSeconds()));
+                        if (!Long.valueOf(1L).equals(renewed)) {
+                            log.warn("Agent 会话锁续租失败: userId={}, sessionId={}", userId, sessionId);
+                        }
+                    } catch (RuntimeException exception) {
+                        log.warn("Agent 会话锁续租异常: userId={}, sessionId={}", userId, sessionId, exception);
+                    }
+                },
+                SESSION_LOCK_TTL.toSeconds() / 3, SESSION_LOCK_TTL.toSeconds() / 3, TimeUnit.SECONDS);
         try {
-            return startLocked(userId, sessionId, query, kbId, onEvent);
+            return startLocked(userId, sessionId, clientRequestId, query, kbId, onEvent);
         } finally {
-            redis.execute(new DefaultRedisScript<>(UNLOCK_SCRIPT, Long.class), List.of(lockKey), lockToken);
+            lease.cancel(false);
+            try {
+                redis.execute(new DefaultRedisScript<>(UNLOCK_SCRIPT, Long.class), List.of(lockKey), lockToken);
+            } catch (RuntimeException exception) {
+                log.warn("Agent 会话锁释放异常: userId={}, sessionId={}", userId, sessionId, exception);
+            }
         }
     }
 
@@ -149,7 +186,8 @@ public class AgentRunService {
      * @return
      */
     private AgentExecutionResult startLocked(
-            Long userId, String sessionId, String query, Long kbId, Consumer<AgentEvent> onEvent) {
+            Long userId, String sessionId, String clientRequestId, String query,
+            Long kbId, Consumer<AgentEvent> onEvent) {
         if (userId == null || userId <= 0) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "用户未登录");
         }
@@ -163,18 +201,38 @@ public class AgentRunService {
         if (sessionId == null || sessionId.isBlank() || sessionId.length() > 64) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "sessionId 无效");
         }
+        query = normalizeInput(query);
         if (query.length() > agentProperties.getMaxInputChars()) {
             throw new BusinessException(
                     ErrorCode.BAD_REQUEST,
                     "输入过长，最多允许 " + agentProperties.getMaxInputChars() + " 个字符");
         }
+        if (clientRequestId != null && !clientRequestId.isBlank()) {
+            clientRequestId = clientRequestId.trim();
+            if (clientRequestId.length() > 128) {
+                throw new BusinessException(ErrorCode.BAD_REQUEST, "clientRequestId 不能超过 128 个字符");
+            }
+            AgentRun existing = runMapper.selectByClientRequest(userId, clientRequestId);
+            if (existing != null) {
+                return existingResult(existing);
+            }
+        }
         AgentRun run = new AgentRun();
         run.setSessionId(sessionId);
+        run.setClientRequestId(clientRequestId);
         run.setUserId(userId);
         run.setStatus("INIT");
         run.setQuery(query);
         run.setMaxIterations(DEFAULT_MAX_ITERATIONS);
-        runMapper.insert(run);
+        try {
+            runMapper.insert(run);
+        } catch (DuplicateKeyException exception) {
+            AgentRun existing = runMapper.selectByClientRequest(userId, clientRequestId);
+            if (existing != null) {
+                return existingResult(existing);
+            }
+            throw exception;
+        }
 
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(new ChatMessage("system", SYSTEM_PROMPT));
@@ -322,7 +380,7 @@ public class AgentRunService {
                 // 新增DEGRADED状态用于表示 LLM 调用失败但已经有检索引用时，使得可用性更高，不再把整个 Agent 任务判定为失败
                 if (e instanceof AiClientException && !references.isEmpty()) {
                     String answer = "模型服务暂不可用，以下是本次检索到的参考资料。请稍后重试生成答案。";
-                    updateStatus(runId, "DEGRADED");
+                    updateAnswerAndStatus(runId, "DEGRADED", answer);
                     recordAgentTransition("degraded");
                     onEvent.accept(new AgentEvent("done", Map.of(
                             "answer", answer, "references", references, "degraded", true)));
@@ -375,7 +433,7 @@ public class AgentRunService {
                 }
             } else {
                 String answer = response.content() == null ? "" : response.content();
-                updateStatus(runId, "COMPLETED");
+                updateAnswerAndStatus(runId, "COMPLETED", answer);
                 recordAgentTransition("completed");
                 onEvent.accept(new AgentEvent("done", Map.of("answer", answer, "references", references)));
                 return new AgentExecutionResult(runId, "COMPLETED", answer, references, null);
@@ -417,7 +475,7 @@ public class AgentRunService {
             recordTokens(response.usage(), chatClient.providerName(), chatClient.modelName());
             recordLlmStep(runId, maxIterations + 1, response, System.currentTimeMillis() - startMs);
             String answer = response.content().trim();
-            updateStatus(runId, "MAX_STEPS_REACHED");
+            updateAnswerAndStatus(runId, "MAX_STEPS_REACHED", answer);
             recordAgentTransition("max_steps_reached");
             onEvent.accept(new AgentEvent("done", Map.of(
                     "answer", answer,
@@ -524,6 +582,29 @@ public class AgentRunService {
         runMapper.update(null, new LambdaUpdateWrapper<AgentRun>()
                 .eq(AgentRun::getId, runId)
                 .set(AgentRun::getStatus, status));
+    }
+
+    private void updateAnswerAndStatus(Long runId, String status, String answer) {
+        runMapper.update(null, new LambdaUpdateWrapper<AgentRun>()
+                .eq(AgentRun::getId, runId)
+                .set(AgentRun::getStatus, status)
+                .set(AgentRun::getAnswer, answer));
+    }
+
+    private AgentExecutionResult existingResult(AgentRun run) {
+        List<Reference> references = loadReferences(run.getId());
+        return new AgentExecutionResult(run.getId(), run.getStatus(), run.getAnswer(), references, null);
+    }
+
+    private static String normalizeInput(String input) {
+        String normalized = java.text.Normalizer.normalize(input, java.text.Normalizer.Form.NFKC).trim();
+        for (int i = 0; i < normalized.length(); i++) {
+            char ch = normalized.charAt(i);
+            if (Character.isISOControl(ch) && ch != '\n' && ch != '\r' && ch != '\t') {
+                throw new BusinessException(ErrorCode.BAD_REQUEST, "输入包含非法控制字符");
+            }
+        }
+        return normalized;
     }
 
     private String toJson(Object value) {

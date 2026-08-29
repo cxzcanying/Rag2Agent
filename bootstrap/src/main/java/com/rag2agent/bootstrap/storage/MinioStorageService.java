@@ -10,6 +10,9 @@ import io.minio.PutObjectArgs;
 import io.minio.http.Method;
 import jakarta.annotation.PostConstruct;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -64,6 +67,16 @@ public class MinioStorageService {
                 .object(objectKey)
                 .build())) {
             return input.readAllBytes();
+        }
+    }
+
+    public void downloadTo(String objectKey, Path target) throws Exception {
+        try (InputStream input = client.getObject(GetObjectArgs.builder()
+                .bucket(properties.getBucket())
+                .object(objectKey)
+                .build());
+                OutputStream output = Files.newOutputStream(target)) {
+            input.transferTo(output);
         }
     }
 }

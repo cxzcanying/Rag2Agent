@@ -69,10 +69,15 @@ rag2agent:
       enabled: ${RAG2AGENT_EMBEDDING_CACHE_ENABLED:true}
       max-entries: ${RAG2AGENT_EMBEDDING_CACHE_MAX_ENTRIES:10000}
       ttl-seconds: ${RAG2AGENT_EMBEDDING_CACHE_TTL_SECONDS:3600}
+      model-version: ${RAG2AGENT_EMBEDDING_MODEL_VERSION:v1}
+      dimension: ${RAG2AGENT_EMBEDDING_DIMENSION:1024}
   rate-limit:
     enabled: ${RAG2AGENT_RATE_LIMIT_ENABLED:true}
     limit: ${RAG2AGENT_RATE_LIMIT:60}
     window-seconds: ${RAG2AGENT_RATE_LIMIT_WINDOW_SECONDS:60}
+    login-failure-limit: ${RAG2AGENT_LOGIN_FAILURE_LIMIT:5}
+    login-failure-window-seconds: ${RAG2AGENT_LOGIN_FAILURE_WINDOW_SECONDS:900}
+    login-lock-seconds: ${RAG2AGENT_LOGIN_LOCK_SECONDS:900}
   agent:
     context-token-budget: ${RAG2AGENT_CONTEXT_TOKEN_BUDGET:6000}
     max-input-chars: ${RAG2AGENT_MAX_INPUT_CHARS:12000}

@@ -20,6 +20,10 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -51,6 +55,15 @@ public class IngestPipelineService {
     private static final String UNLOCK_SCRIPT =
             "if redis.call('get', KEYS[1]) == ARGV[1] then "
                     + "return redis.call('del', KEYS[1]) else return 0 end";
+    private static final String RENEW_SCRIPT =
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                    + "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end";
+    private static final ScheduledExecutorService LEASE_EXECUTOR =
+            Executors.newScheduledThreadPool(1, task -> {
+                Thread thread = new Thread(task, "ingest-lock-lease");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     private final DocumentMetaMapper documentMapper;
     private final DocumentChunkMapper chunkMapper;
@@ -92,12 +105,28 @@ public class IngestPipelineService {
         if (!Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(lockKey, lockToken, INGEST_LOCK_TTL))) {
             throw new IllegalStateException("同一文档正在入库，稍后重试: " + documentId);
         }
+        ScheduledFuture<?> lease = LEASE_EXECUTOR.scheduleAtFixedRate(() -> {
+            try {
+                Long renewed = redis.execute(new DefaultRedisScript<>(RENEW_SCRIPT, Long.class),
+                        List.of(lockKey), lockToken, String.valueOf(INGEST_LOCK_TTL.toSeconds()));
+                if (!Long.valueOf(1L).equals(renewed)) {
+                    log.warn("入库锁续租失败: documentId={}", documentId);
+                }
+            } catch (RuntimeException exception) {
+                log.warn("入库锁续租异常: documentId={}", documentId, exception);
+            }
+        }, INGEST_LOCK_TTL.toSeconds() / 3, INGEST_LOCK_TTL.toSeconds() / 3, TimeUnit.SECONDS);
         try {
             processLocked(documentId, taskId);
         } finally {
-            redis.execute(
-                    new DefaultRedisScript<>(UNLOCK_SCRIPT, Long.class),
-                    List.of(lockKey), lockToken);
+            lease.cancel(false);
+            try {
+                redis.execute(
+                        new DefaultRedisScript<>(UNLOCK_SCRIPT, Long.class),
+                        List.of(lockKey), lockToken);
+            } catch (RuntimeException exception) {
+                log.warn("入库锁释放异常: documentId={}", documentId, exception);
+            }
         }
     }
 
@@ -135,9 +164,8 @@ public class IngestPipelineService {
 
         Path tempPdf = null;
         try {
-            byte[] bytes = storage.download(document.getStoragePath());
             tempPdf = Files.createTempFile("rag2agent-", ".pdf");
-            Files.write(tempPdf, bytes);
+            storage.downloadTo(document.getStoragePath(), tempPdf);
             ParsedDocument parsed = new PdfBoxDocumentParser().parse(new DocumentSource(
                     String.valueOf(documentId), document.getFileName(), tempPdf.toUri(),
                     "application/pdf", Map.of()));
@@ -195,9 +223,10 @@ public class IngestPipelineService {
                 throw new IllegalStateException("Embedding 返回数量不匹配: 期望 " + batchTexts.size()
                         + " 条，实际 " + response.vectors().size() + " 条");
             }
+            List<DocumentChunkMapper.ChunkRow> rows = new java.util.ArrayList<>(response.vectors().size());
             for (int i = 0; i < response.vectors().size(); i++) {
                 TextChunk chunk = chunks.get(start + i);
-                chunkMapper.insertChunk(
+                rows.add(new DocumentChunkMapper.ChunkRow(
                         document.getId(),
                         document.getKbId(),
                         chunk.position(),
@@ -206,8 +235,9 @@ public class IngestPipelineService {
                         toVectorString(response.vectors().get(i)),
                         null,
                         "{}",
-                        version);
+                        version));
             }
+            chunkMapper.insertChunks(rows);
             start = end;
         }
     }

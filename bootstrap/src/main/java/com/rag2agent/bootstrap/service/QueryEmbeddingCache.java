@@ -116,9 +116,10 @@ public class QueryEmbeddingCache {
         }
 
         // ========== 第二步：生成缓存 Key ==========
-        // Key 格式：embedding:v1:{provider}:{model}:{query的SHA-256}
+        // Key 格式：embedding:{模型版本}:{维度}:{provider}:{model}:{query摘要}
         // 使用 SHA-256 对 query 做哈希，避免 query 过长或包含特殊字符
-        String key = "embedding:v1:" + provider + ":"
+        String key = "embedding:" + properties.getModelVersion() + ":" + properties.getDimension() + ":"
+                + provider + ":"
                 + (model == null ? "default" : model) + ":"
                 + sha256(query.trim());
 

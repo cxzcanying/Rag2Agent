@@ -80,10 +80,10 @@
 ### 第二版 D3 实际进度（全链路追踪与日志）
 
 - 已完成：RocketMQ 开发端口切换为宿主 `19091/19111/19112`，broker 实际监听 `19111`；Jaeger all-in-one 固定为 `1.60`，UI `16686`、OTLP HTTP `4318`。
-- 已完成：检索增加 `route/embedding/vector/keyword/rrf/rerank` Observation 子 span；原有 Agent 的 LLM/tool span 保留；MQ producer/consumer 增加 Observation，消息携带 `traceId`。
+- 已完成：检索增加 `route/embedding/vector/keyword/rrf/rerank` Observation 子 span；原有 Agent 的 LLM/tool span 保留；MQ producer/consumer 增加 Observation，消息通过 W3C `traceparent/tracestate` 传播上下文。
 - 已完成：`POST /api/chat` SSE 首事件返回 traceId，前端聊天消息显示“诊断 ID”，可用于日志和 Jaeger 查询。
 - 已验证：`/api/health` 返回 `UP`；Jaeger `/api/services` 已出现 `rag2agent`，可查询 HTTP span；前后端构建通过。
-- 未完成：RocketMQ 当前以消息属性携带 traceId，消费端建立独立 span，尚未实现跨进程 parent span 关联；需要后续接入标准传播器后再宣称 HTTP→MQ 单 trace 串联。
+- 未完成：仍需真实发送消息并在 Jaeger 验收 producer→consumer 父子关系，以及补齐 Agent run/step 字段关联证据。
 
 ### 第二版 D6 实际进度（模型与工具扩展）
 
@@ -95,9 +95,9 @@
 
 ### 第二版 D7 实际进度（集成验收与成本治理）
 
-- 已完成：AI 请求和 Agent Token 指标统一带 `provider/model/operation/outcome` 低基数标签，完整响应的 `prompt_tokens/completion_tokens/total_tokens` 会进入 Micrometer。
-- 已验证：infra-ai、rag-core、bootstrap 的确定性单测通过；应用上下文测试仅因本机 MinIO 未启动失败。
-- 未完成：流式 usage 解析、真实 provider 成本账本、队列积压指标、公开评测回归、RocketMQ→Jaeger 父子链路和故障演练仍需中间件及真实 API 条件，保留在 TODO。
+- 已完成：AI 请求和 Agent Token 指标统一带 `provider/model/operation/outcome` 低基数标签，完整与流式响应的 `prompt_tokens/completion_tokens/total_tokens`（供应商提供时）会进入 Micrometer；评测、检索和工具执行器队列深度/剩余容量已暴露 gauge；登录失败锁定、Agent 请求幂等、session 锁租约续期和批量入库已落地。
+- 已验证：Docker Compose 中 PostgreSQL、Redis、MinIO、RocketMQ、Neo4j、Jaeger 健康；`mvn -pl bootstrap -am test` 通过 25/25；应用上下文测试已可在 MinIO 启动后通过。
+- 未完成：真实 provider 成本价格账本、公开评测回归、RocketMQ→Jaeger 父子链路和故障演练仍需真实外部条件；SSE 断连重连、真实 tokenizer 校准等需要协议/选型，保留在 TODO。
 
 ### V2 范围裁决
 

@@ -13,9 +13,11 @@ public class AgentRun {
     @TableId(type = IdType.AUTO)
     private Long id;
     private String sessionId;
+    private String clientRequestId;
     private Long userId;
     private String status;
     private String query;
+    private String answer;
     private Integer maxIterations;
     private Instant createdAt;
     private Instant updatedAt;

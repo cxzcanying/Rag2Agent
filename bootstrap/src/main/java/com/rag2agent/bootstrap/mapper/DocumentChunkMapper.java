@@ -3,6 +3,7 @@ package com.rag2agent.bootstrap.mapper;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Param;
+import java.util.List;
 
 /**
  * document_chunk 原生 SQL（embedding 为 pgvector 类型，需 ::vector 转换）。
@@ -19,6 +20,30 @@ import org.apache.ibatis.annotations.Param;
  * </ul>
  */
 public interface DocumentChunkMapper {
+
+    record ChunkRow(
+            Long documentId,
+            Long kbId,
+            int chunkIndex,
+            String content,
+            int tokenCount,
+            String embedding,
+            Integer pageNumber,
+            String metadata,
+            int version) {}
+
+    @Insert({
+        "<script>",
+        "INSERT INTO document_chunk",
+        "(document_id, kb_id, chunk_index, content, token_count, embedding, page_number, metadata, version)",
+        "VALUES",
+        "<foreach collection='chunks' item='chunk' separator=','>",
+        "(#{chunk.documentId}, #{chunk.kbId}, #{chunk.chunkIndex}, #{chunk.content}, #{chunk.tokenCount},",
+        "#{chunk.embedding}::vector, #{chunk.pageNumber}, CAST(#{chunk.metadata} AS jsonb), #{chunk.version})",
+        "</foreach>",
+        "</script>"
+    })
+    int insertChunks(@Param("chunks") List<ChunkRow> chunks);
 
     @Insert("""
             INSERT INTO document_chunk

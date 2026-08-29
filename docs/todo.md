@@ -46,10 +46,10 @@
 
 ## P2 性能 / 安全（后续阶段）
 
-- [ ] **chunk 逐条 INSERT 性能**（IngestPipelineService.persistChunks）：1310 条逐条插入，可改 MyBatis 批量插入（foreach / JDBC batch）。
-- [ ] **MinIO 下载全量读内存**（MinioStorageService.download）：`readAllBytes` 在 50MB 上限时内存峰值高，可改流式下载 + 解析。
+- [x] **chunk 逐条 INSERT 性能**（IngestPipelineService.persistChunks）：已改为 MyBatis foreach 批量 INSERT，并在 embedding 数量校验通过后一次写入。
+- [x] **MinIO 下载全量读内存**（MinioStorageService.download）：入库链路已改为流式下载到临时文件再交给 PDF 解析器；保留小文件 byte[] API 供其他调用方使用。
 - [x] **知识库列表按 owner 过滤**（KnowledgeBaseService.list）：已按 `owner_user_id` 查询；知识库、文档、检索、Agent 工具、评测 run 和审批入口均已覆盖 owner 校验。
-- [ ] **登录接口无限流/失败锁定**（AuthController）：后续 Phase 6 加用户级限流与失败次数锁定。
+- [x] **登录接口无限流/失败锁定**（AuthController）：已用 Redis Lua 原子累计失败次数，达到阈值后按账号临时锁定，窗口和锁定时长配置化。
 - [ ] **查询增强实验：HyDE / Query Rewriting**（HybridSearchService.search）
   - 背景：疑问句直接向量化时，问题与文档（陈述句）在向量空间存在距离；HyDE 先让 LLM 生成"假设答案"再向量化检索，Query Rewriting 把问题改写为关键词句。
   - 方案：D13 评测阶段跑 A/B 对比（同一评测集：直接向量检索 vs HyDE 改写后检索），Hit@k/MRR 明显提升且成本可接受再接入；注意假设答案幻觉可能带偏检索方向。
@@ -61,18 +61,17 @@
   - 方案：评测阶段用真实 tokenizer（或按语言分治估算）校准。
 
 > 注：overlap 拼接使 chunk 长度上限为 `chunkSize + overlap`，这是设计行为（`RecursiveTextSplitterTest` 已用 `<= chunkSize+overlap` 断言），不是缺陷。
-- [ ] **SSE 流式解析未覆盖多行 data 与断连重连**（OpenAiChatModelClient.stream）
-  - 问题：只认单行 `data:` 前缀，多行 data、`event:` 字段、断连半包都未处理；真实网关分块行为与 mock 不同。
-  - 方案：实现 SSE 事件状态机（data 多行聚合、`[DONE]` 终止、超时/断连重连），D11-D12 对话接口前补齐。
+- [ ] **SSE 流式解析未覆盖断连重连**（OpenAiChatModelClient.stream）
+  - 已完成：支持空行分隔事件、多行 `data:` 聚合、`[DONE]` 终止和流式 usage 回调。
+  - 残留：断连半包的自动重连、事件重放和断点续传需要协议约定及真实网关验证。
 - [x] **AuthService.register 并发竞态**（selectCount + insert 非原子）
   - 问题：并发注册同名用户可能同时通过 selectCount 检查，靠 DB 唯一约束兜底会抛 500 而非友好错误。
   - 方案：username 建唯一约束并捕获 DuplicateKeyException 转 BAD_REQUEST，或注册加分布式锁。
 - [x] **检索/文档/Agent 链路 kbId 归属校验（越权）**（SearchController / DocumentController / Agent 工具层 / 审批接口）
   - 已完成：`KnowledgeBaseService.requireOwned` 作为统一 owner 检查；`reingest/presign` 在服务层校验文档所属知识库；Agent 的 `search_knowledge_base/delete_document` 工具在执行层校验参数归属；审批校验 `run.user_id`，不是只依赖 Controller。
   - 仍需补：工具调用的安全审计和越权集成测试，禁止只用单元 mock 覆盖真实 SQL 权限边界。
-- [ ] **只读工具调用未落库审计**（AgentRunService.executeLoop）
-  - 问题：非审批工具（search_knowledge_base）执行时只推送 tool_start 事件，未写 tool_call 表，工具调用轨迹不完整。
-  - 方案：所有工具调用统一落库（status SUCCEEDED/FAILED），审批工具沿用 WAITING_APPROVAL 流程。
+- [x] **只读工具调用未落库审计**（AgentRunService.executeLoop）
+  - 已完成：非审批工具统一经 `ToolExecutor` 创建并更新 `tool_call` 记录，覆盖 SUCCEEDED/FAILED/TIMED_OUT；审批工具继续使用 WAITING_APPROVAL 记录并 CAS 抢占。
 
 - [x] **Agent 最大迭代耗尽后的用户体验**（AgentRunService.executeLoop）
   - 已完成：循环耗尽后进入 `FINALIZING`，发起一次不携带工具定义的强制总结；总结成功标记 `MAX_STEPS_REACHED` 并返回已有上下文答案，只有总结失败才标记 `FAILED`。测试覆盖“无工具总结”和上游失败脱敏。
@@ -112,7 +111,7 @@
   - 未完成：完整 Agent 请求与数据库 run/step 的统一字段验收、真实 Jaeger producer→consumer 父子链路验收仍待补齐。
 
 - [ ] **业务指标补全**（核心指标已落地）
-  - 当前：已有检索耗时、结果数、LLM 耗时、Token、Agent transition、Embedding L1/L2 缓存、AI retry/upstream/circuit/bulkhead、API 限流和检索超时指标；仍缺队列积压、真实 provider/model 维度的 Token 成本账本。
+  - 当前：已有检索耗时、结果数、LLM 耗时、Token、Agent transition、Embedding L1/L2 缓存、AI retry/upstream/circuit/bulkhead、API 限流、检索超时和评测/检索/工具执行器队列深度指标；仍缺真实 provider/model 价格维度的 Token 成本账本。
   - 方案：Micrometer 统一命名和低基数标签，补充 `cache.hit/miss`、`search.phase.duration`、`ai.request/retry/limit`、`context.tokens`、`mq.lag`；Prometheus 采集，Grafana/Jaeger 作为展示面。
   - 验收：能按 provider、模型、路由、结果状态查看 QPS、P50/P95/P99、错误率、Token 和缓存命中率。
 
@@ -129,10 +128,10 @@
 
 - [x] **统一错误边界**：`BusinessException` 按错误码映射 HTTP 状态；未知异常和内部业务异常只返回稳定文案，详细原因写入结构化服务端日志。
 - [x] **AI 客户端关闭韧性开关的边界**：关闭重试/熔断后仍检查 HTTP 状态并抛出 `AiClientException`，避免上层把 429/5xx 当作成功响应解析。
-- [ ] **仍需深入选型的事项**：真实 tokenizer 与 provider usage 校准、跨实例熔断状态、SSE 断连重连、RocketMQ→Jaeger 真实父子链路、Agent 请求幂等和锁租约续期。这些不能用字符估算或单实例内存状态冒充完成。
+- [ ] **仍需深入选型的事项**：真实 tokenizer 与 provider usage 校准、跨实例熔断状态、SSE 断连重连、RocketMQ→Jaeger 真实父子链路。这些不能用字符估算或单实例内存状态冒充完成。
 
 - [ ] **输入防御与成本配额**
-  - 当前：有基础 DTO 校验，但没有统一最大字符/token、恶意提示注入防护、单用户 Token 配额和并发限制。
+  - 当前：Agent 入口已做 NFKC 规范化、控制字符拒绝和配置化最大字符数，DTO 已限制 query/clientRequestId，工具参数有 schema/权限校验；仍缺统一跨接口 token 配额、恶意提示注入风险信号和单用户每日额度。
   - 方案：入口做 Unicode/长度/控制字符规范化；按用户和知识库限制请求长度、检索 topK、Agent 最大步数和每日 Token；系统提示与外部文档分层，工具参数做 schema/权限校验；提示注入检测只作为风险信号，不替代权限控制。超限返回 400/413/429。
   - 验收：超长输入、控制字符、提示注入样例和高频请求均优雅拒绝或降级，不泄露系统提示和密钥。
 
@@ -144,11 +143,12 @@
   - 当前：入库任务有部分重试幂等，但同名上传、创建知识库和 Agent 请求仍可能因网络重试产生重复业务对象；相关竞态已在本清单前文列出。
   - 方案：API 接受 `Idempotency-Key`；数据库对 `owner + key`、`kb_id + checksum` 建唯一约束；上传按文件 hash 决定复用或新版本；Agent 请求按 `userId + sessionId + clientRequestId` 去重。
   - 验收：同一请求重放只返回第一次结果；并发重放不重复上传、入库、扣费或执行工具副作用。
-  - 当前残留风险：Agent 已增加同一用户同一 session 的并发 Redis 锁，可阻止双击/并发请求；但请求完成后再次重试仍会创建新 run。后续需在 `ChatRequest` 增加 `clientRequestId`，并按 `userId + clientRequestId` 做数据库/Redis 幂等去重。
+  - 已完成：Agent `ChatRequest` 接受 `clientRequestId`，数据库对 `user_id + client_request_id` 建唯一索引；已完成请求重放直接返回原 run 和 answer，插入竞态通过唯一键查询复用。
+  - 残留：文档同名上传、知识库创建等其他 API 的统一 `Idempotency-Key` 仍需产品语义和接口范围确认。
 
-- [ ] **Redis 分布式锁租约续期**
-  - 当前残留风险：入库锁 TTL 为 2 小时，Agent session 锁 TTL 为 30 分钟；若模型或 embedding 链路超过 TTL，锁可能自动过期，导致第二个请求重新进入并发执行。
-  - 方案：为长任务增加 watchdog/租约续期，续期脚本必须校验 token；任务结束仍使用 compare-and-delete 释放，避免误删其他请求的锁。
+- [x] **Redis 分布式锁租约续期**
+  - 已完成：Agent session 锁增加 watchdog，按 token 校验后续租；任务结束使用 compare-and-delete 释放，Redis 异常只记录告警，不误删其他请求锁。
+  - 已补齐：入库锁同样使用 watchdog 按 token 校验续租，结束时 compare-and-delete 释放；消费者重试仍以锁冲突后重新投递为准。
 
 - [ ] **RocketMQ 跨进程 parent span 传播**（标准传播已落地）
   - 当前：已使用 OpenTelemetry W3C propagator 将 `traceparent/tracestate` 写入 RocketMQ user properties，消费端提取后在 parent context 下创建 Observation；仍需真实发送消息并在 Jaeger 验收 producer→consumer 父子关系。
@@ -173,11 +173,11 @@
 
 ### P1 缓存、并发与成本
 
-- [ ] **多级缓存**（查询 Embedding 两级缓存和 single-flight 已落地）
+- [x] **多级缓存**（查询 Embedding 两级缓存和 single-flight 已落地）
   - 当前：已增加 Caffeine L1 + Redis L2 查询 Embedding 缓存，key 包含 provider/model/规范化查询摘要，缓存命中/未命中/错误写入 Micrometer；缓存依赖故障透明回源；同一 key 的并发冷启动共享 Future，失败后占位会清理并允许下一次重试。
   - 已确认设计：当前 key 为 `provider + model(default) + 规范化文本 SHA-256`，是内容寻址，不含 `document.version`；文档版本切换不会污染查询 embedding，文本相同可安全复用。
-  - 未完成：缓存 key 尚未显式包含 embedding dimension/model version；模型升级时需要版本化 namespace 或运维清空 Redis。热门检索结果和只读工具结果暂不缓存，避免 ACL、版本和权限维度串缓存。
-  - 方案：补充 `modelVersion/dimension` 命名空间和升级迁移策略；在确认权限、文档版本过滤后再评估检索结果缓存。
+  - 已完成：缓存 key 已显式包含 `modelVersion/dimension` 命名空间，模型升级可通过配置版本自然隔离旧缓存。热门检索结果和只读工具结果暂不缓存，避免 ACL、版本和权限维度串缓存。
+  - 残留：在确认权限、文档版本过滤后再评估检索结果缓存。
   - 验收：命中/未命中可观测，权限和文档版本不会串缓存。
 
 - [ ] **检索并行化**（两路召回并行、超时和单路降级已落地）
@@ -187,7 +187,7 @@
   - 验收：两路并行时端到端延迟接近较慢一路而非两路相加；任一路超时可按策略降级。
 
 - [ ] **长文本截断、摘要与 Token 成本控制**
-  - 当前：Agent 上下文没有统一 token budget；已有 Token 计数指标但没有预算拒绝、摘要、缓存抵扣或用户配额。
+  - 当前：Agent 已有统一 context token budget、输入/输出上限、确定性摘要与超长消息截断，并记录压缩前后 token 指标；仍缺真实 tokenizer、缓存抵扣、按用户配额和成本价格账本。
   - 方案：与上下文压缩共用预算器；限制单次输入/引用/输出，超过阈值先压缩；按 user/provider/model 记录 prompt/completion/cache token 和估算成本；加入每日额度、并发信号量和异常流量告警。
   - 验收：长文本不触发 provider 上限；恶意刷接口在达到配额后返回稳定 429；成本可按用户和模型追踪。
 
