@@ -346,18 +346,21 @@ public class HybridSearchService {
         return jdbc.query(
                 """
                 SELECT c.id, c.content, c.document_id, c.chunk_index,
-                       ts_rank_cd(c.content_zh_tsv, plainto_tsquery('rag2agent_zhcfg', ?)) AS score
+                       CASE WHEN c.content ILIKE '%' || ? || '%' THEN 1.0 ELSE 0.0 END
+                            + COALESCE(ts_rank_cd(c.content_zh_tsv, plainto_tsquery('rag2agent_zhcfg', ?)), 0) AS score
                 FROM document_chunk c
                 JOIN document d ON d.id = c.document_id
                 WHERE c.kb_id = ? AND c.version = d.version
-                  AND c.content_zh_tsv @@ plainto_tsquery('rag2agent_zhcfg', ?)
-                ORDER BY score DESC
+                  AND (c.content ILIKE '%' || ? || '%'
+                       OR c.content_zh_tsv @@ plainto_tsquery('rag2agent_zhcfg', ?))
+                ORDER BY CASE WHEN c.content ILIKE '%' || ? || '%' THEN 1 ELSE 0 END DESC,
+                         score DESC
                 LIMIT ?
                 """,
                 (rs, rowNum) -> new RetrievalResult(
                         rs.getString("id"), rs.getString("content"), rs.getDouble("score"),
                         Map.of("documentId", rs.getLong("document_id"), "chunkIndex", rs.getInt("chunk_index"))),
-                query, kbId, query, topK);
+                escapeLike(query), query, kbId, escapeLike(query), query, escapeLike(query), topK);
     }
 
     private static List<String> chineseBigrams(String query) {
