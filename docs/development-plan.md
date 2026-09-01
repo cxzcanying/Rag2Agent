@@ -83,7 +83,7 @@
 - 已完成：检索增加 `route/embedding/vector/keyword/rrf/rerank` Observation 子 span；原有 Agent 的 LLM/tool span 保留；MQ producer/consumer 增加 Observation，消息通过 W3C `traceparent/tracestate` 传播上下文。
 - 已完成：`POST /api/chat` SSE 首事件返回 traceId，前端聊天消息显示“诊断 ID”，可用于日志和 Jaeger 查询。
 - 已验证：`/api/health` 返回 `UP`；Jaeger `/api/services` 已出现 `rag2agent`，可查询 HTTP span；前后端构建通过。
-- 未完成：仍需真实发送消息并在 Jaeger 验收 producer→consumer 父子关系，以及补齐 Agent run/step 字段关联证据。
+- 已验证：真实上传消息在 Jaeger 中形成 HTTP→`rag2agent.mq.producer`→`rag2agent.mq.consumer` 链路；同一 `traceID` 下 consumer references 包含 producer span，确认异步父子关系。
 
 ### 第二版 D6 实际进度（模型与工具扩展）
 
@@ -91,16 +91,19 @@
 - 已完成：内部工具和可选 MCP 工具统一进入 `ToolRegistry`，工具参数按 descriptor schema 做必填项和基础类型校验；新增只读工具无需修改 Agent 循环。
 - 已完成：`ToolExecutor` 统一执行权限钩子、有界线程池、超时、Observation/Micrometer 和 `tool_call` 成功/失败/超时审计；高风险工具继续复用现有审批记录，不重复创建调用记录。
 - 已完成：MCP 远程工具发现/调用契约和本地适配；远程发现失败时保留本地工具，远程调用受统一超时隔离。
-- 待后续：真实 MCP 网络 transport、认证和服务端权限实现；非 OpenAI-compatible provider 仍需新增协议 adapter，动态刷新仍归配置中心阶段。
+- 已验证：MCP 服务通过真实 HTTP 网络传输提供 JSON-RPC initialize/tools/list/tools/call；无凭证、错误 scope 均返回 401，正确 Bearer token + `mcp:read` 成功，越权工具调用返回 403。
+- 当前边界：MCP 是项目内 JSON-RPC HTTP 子集，尚未承诺完整官方 Streamable HTTP 会话协商；非 OpenAI-compatible provider 仍需新增协议 adapter，动态刷新仍归配置中心阶段。
 
 ### 第二版 D7 实际进度（集成验收与成本治理）
 
 - 已完成：AI 请求和 Agent Token 指标统一带 `provider/model/operation/outcome` 低基数标签，完整与流式响应的 `prompt_tokens/completion_tokens/total_tokens`（供应商提供时）会进入 Micrometer；评测、检索和工具执行器队列深度/剩余容量已暴露 gauge；登录失败锁定、Agent 请求幂等、session 锁租约续期和批量入库已落地。
-- 已验证：Docker Compose 中 PostgreSQL、Redis、MinIO、RocketMQ、Neo4j、Jaeger 健康；`mvn -pl bootstrap -am test` 通过 25/25；应用上下文测试已可在 MinIO 启动后通过。
-- 未完成：真实 provider 成本价格账本、公开评测回归、RocketMQ→Jaeger 父子链路和故障演练仍需真实外部条件；SSE 断连重连、真实 tokenizer 校准等需要协议/选型，保留在 TODO。
+- 已验证：Docker Compose 中 PostgreSQL、Redis、MinIO、RocketMQ、Neo4j、Jaeger 健康；`mvn -pl bootstrap -am test` 全 reactor 通过 74/74（infra-ai 15、rag-core 14、bootstrap 45）；应用上下文测试已可在 MinIO 启动后通过。
+- 已验证：RocketMQ 非法消息在 attempt 0/1/2 失败后进入 `%DLQ%rag2agent-ingest-consumer`，可用 `mqadmin consumeMessage` 读取并修正后回投；两实例同 consumer group 消费不同队列，完成重平衡演练；Redis 入库锁冲突可观测（`rag2agent.lock.operations` acquire/conflict），锁过期后消息成功恢复；SSE 客户端 abort 后以 `Last-Event-ID` 仅回放后续事件。
+- 已完成：DeepSeek/SiliconFlow 官方价格已配置，账本真实写入 `USD` 金额和分时价格版本；实测 `deepseek-v4-flash` 2639/942 tokens，总成本 `0.0011205080 USD`。
+- 已完成最小回归：本地 PDF 冒烟金标集 4 条，VECTOR/HYBRID Hit@2=1.000、MRR=1.000；生产规模评测仍需脱敏生产文档和业务确认的金标答案。完整流程见 [V2 集成验收记录](v2-validation-report.md)。
 
 ### V2 范围裁决
 
 - **本周必须做**：评测异步化、上下文预算、OTel/Jaeger 链路、结构化日志、限流/超时/重试/降级、幂等、Token 与缓存指标。
-- **本周做抽象但不强行上线**：Nacos/Apollo 动态配置、非兼容模型 adapter、远程 MCP transport；先保证接口边界和本地 fallback。
+- **本周做抽象但不强行上线**：Nacos/Apollo 动态配置、非兼容模型 adapter、完整官方 Streamable HTTP 会话协商；当前 MCP 项目内 JSON-RPC HTTP 子集已完成，先保留本地 fallback。
 - **暂不纳入七天核心验收**：GraphRAG、复杂提示注入分类模型、完整语义缓存平台、跨地域配置中心高可用。这些可在 V2.1 继续推进。

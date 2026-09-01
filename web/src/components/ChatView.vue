@@ -56,7 +56,7 @@ async function send() {
       kbId: Number(kbId.value),
       query: q,
       clientRequestId: crypto.randomUUID()
-    }, (event) => handleEvent(assistant, event))
+    }, (event, eventId) => handleEvent(assistant, event, eventId))
     if (assistant.runId && !assistant.content && !pendingApproval.value) {
       processStage.value = '连接已中断，正在恢复任务状态...'
       await recoverRun(assistant.runId, assistant)
@@ -64,7 +64,12 @@ async function send() {
   } catch (e) {
     if (assistant.runId) {
       processStage.value = '连接已中断，正在恢复任务状态...'
-      await recoverRun(assistant.runId, assistant)
+      try {
+        await agent.replay(assistant.runId, assistant.lastEventId, (event, eventId) =>
+          handleEvent(assistant, event, eventId))
+      } catch {
+        await recoverRun(assistant.runId, assistant)
+      }
     } else {
       assistant.content = '请求失败：' + e.message
     }
@@ -105,7 +110,8 @@ async function recoverRun(runId, assistant) {
   processStage.value = '任务仍在后台执行，可稍后重试查看结果'
 }
 
-function handleEvent(msg, event) {
+function handleEvent(msg, event, eventId = null) {
+  if (eventId) msg.lastEventId = eventId
   switch (event.type) {
     case 'context_compaction':
       msg.contextCompression = event.data || null

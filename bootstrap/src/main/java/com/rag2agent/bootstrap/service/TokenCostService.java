@@ -2,6 +2,7 @@ package com.rag2agent.bootstrap.service;
 
 import com.rag2agent.bootstrap.config.TokenCostProperties;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.time.Instant;
 import java.util.Map;
 import java.util.List;
 import com.rag2agent.infra.ai.model.ChatMessage;
@@ -52,13 +53,14 @@ public class TokenCostService {
                 number(usage.get("cache_read_input_tokens")));
         long estimated = estimateMessages(messages, tools);
         TokenCostProperties.Price price = properties.getPrices().get(provider + "/" + model);
+        TokenCostProperties.Price.ResolvedPrice resolved = price == null ? null : price.resolve(Instant.now());
         double promptCost = 0;
         double completionCost = 0;
-        if (price != null) {
+        if (resolved != null) {
             long billablePrompt = Math.max(0, prompt - cached);
-            promptCost = billablePrompt * price.getPromptPerMillion() / 1_000_000d
-                    + cached * price.getCacheReadPerMillion() / 1_000_000d;
-            completionCost = completion * price.getCompletionPerMillion() / 1_000_000d;
+            promptCost = billablePrompt * resolved.promptPerMillion() / 1_000_000d
+                    + cached * resolved.cacheReadPerMillion() / 1_000_000d;
+            completionCost = completion * resolved.completionPerMillion() / 1_000_000d;
             double cost = promptCost + completionCost;
             meterRegistry.counter("rag2agent.ai.cost", "provider", provider, "model", model).increment(cost);
         }
@@ -72,7 +74,7 @@ public class TokenCostService {
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, provider, model, prompt, completion, total, estimated, cached,
                         promptCost, completionCost, promptCost + completionCost,
-                        price == null ? null : price.getCurrency(), price == null ? null : price.getVersion());
+                        resolved == null ? null : resolved.currency(), resolved == null ? null : resolved.version());
             } catch (DataAccessException exception) {
                 log.warn("AI 成本账本写入失败，不影响模型请求: provider={}, model={}", provider, model, exception);
             }

@@ -120,8 +120,10 @@ public class IngestPipelineService {
         String lockKey = "rag2agent:ingest:lock:" + documentId;
         String lockToken = UUID.randomUUID().toString();
         if (!Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(lockKey, lockToken, INGEST_LOCK_TTL))) {
+            lockMetric("acquire", "conflict");
             throw new IllegalStateException("同一文档正在入库，稍后重试: " + documentId);
         }
+        lockMetric("acquire", "success");
         ScheduledFuture<?> lease = LEASE_EXECUTOR.scheduleAtFixedRate(() -> {
             try {
                 Long renewed = redis.execute(new DefaultRedisScript<>(RENEW_SCRIPT, Long.class),

@@ -107,9 +107,9 @@
 
 ### 3.5 工具链：工具协议 / 敏感操作机制
 
-- 工具协议：MCP 为标准（官方 Java SDK `io.modelcontextprotocol.sdk:mcp` 1.0.0），内部工具与外部 MCP 工具统一进工具注册表。
+- 工具协议：MCP 作为目标标准；当前 V2 采用项目内 JSON-RPC HTTP 子集，内部工具与远程工具统一进工具注册表，完整官方 SDK/Streamable HTTP 会话协商留待后续兼容性评估。
   - 统一 ToolDescriptor：名称/描述/参数 JSON Schema/敏感度/授权角色/超时/重试/幂等键/成本等级；
-  - 接入通道：内部 Java 工具（注册表注册）+ 外部 MCP 工具（stdio / Streamable HTTP）。
+  - 接入通道：内部 Java 工具（注册表注册）+ 当前已验证的外部 MCP HTTP 子集；stdio/完整 Streamable HTTP 仍是演进方向。
 - 敏感操作机制：
   - 敏感度分级：只读（查询/检索）→ 普通写（知识库内操作）→ 高风险（跨系统、外部副作用、删除、支付类）；
   - 高风险操作必须 human-in-the-loop 审批（Agent 进入 WAITING_APPROVAL），审批动作全审计；
@@ -248,7 +248,7 @@ flowchart LR
   Bootstrap --> Framework["framework: 通用基础设施"]
   Bootstrap --> RagCore["rag-core: RAG 核心接口"]
   Bootstrap --> InfraAi["infra-ai: AI 供应商抽象"]
-  Bootstrap --> Mcp["mcp-server: 工具服务预留"]
+  Bootstrap --> Mcp["mcp-server: MCP 工具服务"]
   Bootstrap --> Postgres["PostgreSQL + pgvector"]
   Bootstrap --> Redis["Redis"]
   Bootstrap --> MinIO["MinIO"]
@@ -259,7 +259,7 @@ flowchart LR
 - `framework` 只放通用工程能力：统一响应、异常处理、Redis、鉴权、ORM、限流和 Trace 预留。
 - `infra-ai` 只屏蔽 AI 供应商差异：Chat、Embedding、Rerank、VectorStore 接口。
 - `rag-core` 只定义 RAG 链路抽象：解析、切块、检索、重排和 Prompt 构造。
-- `mcp-server` 只作为工具调用服务预留，第一阶段不实现工具。
+- `mcp-server` 负责工具调用契约与 HTTP JSON-RPC 服务；第一阶段只保留模块边界，V2 已提供受认证和 scope 权限保护的远程工具子集。
 - `bootstrap` 负责应用启动、配置装配和对外 API，是唯一对外入口。
 
 ### 9.3 设计取舍（与第 5 节互补）

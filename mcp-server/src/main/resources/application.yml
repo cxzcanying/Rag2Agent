@@ -1,0 +1,11 @@
+server:
+  port: ${MCP_SERVER_PORT:19090}
+spring:
+  application:
+    name: rag2agent-mcp
+rag2agent:
+  mcp:
+    server:
+      token: ${MCP_SERVER_TOKEN:dev-mcp-token}
+      required-scopes: ${MCP_SERVER_REQUIRED_SCOPES:mcp:read}
+      token-scopes: ${MCP_SERVER_TOKEN_SCOPES:mcp:read}

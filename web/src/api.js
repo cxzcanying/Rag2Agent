@@ -54,34 +54,49 @@ export const agent = {
       const json = await resp.json().catch(() => ({}))
       throw new Error(json.message || '对话请求失败')
     }
-    const reader = resp.body.getReader()
-    const decoder = new TextDecoder('utf-8')
-    let buffer = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (trimmed.startsWith('data:')) {
-          const data = trimmed.slice(5).trim()
-          if (data && data !== '[DONE]') {
-            try {
-              const event = JSON.parse(data)
-              onEvent(event)
-            } catch {
-              // 忽略无法解析的分片
-            }
-          }
-        }
-      }
-    }
+    await readSse(resp, onEvent)
+  },
+  replay: async (runId, lastEventId, onEvent) => {
+    const headers = {}
+    const t = getToken()
+    if (t) headers.satoken = t
+    if (lastEventId) headers['Last-Event-ID'] = lastEventId
+    const resp = await fetch(BASE + '/agent/runs/' + runId + '/events', { headers })
+    if (!resp.ok) throw new Error('断线恢复失败')
+    await readSse(resp, onEvent)
   },
   getRun: (runId) => request('/agent/runs/' + runId),
   approve: (runId, approved) =>
     request('/agent/approvals/' + runId, { method: 'POST', body: JSON.stringify({ approved }) })
+}
+
+async function readSse(resp, onEvent) {
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+  let eventId = null
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('id:')) eventId = trimmed.slice(3).trim()
+      if (trimmed.startsWith('data:')) {
+        const data = trimmed.slice(5).trim()
+        if (data && data !== '[DONE]') {
+          try {
+            onEvent(JSON.parse(data), eventId)
+            eventId = null
+          } catch {
+            // 忽略无法解析的分片
+          }
+        }
+      }
+    }
+  }
 }
 
 export const evaluations = {

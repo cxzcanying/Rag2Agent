@@ -2,6 +2,7 @@ package com.rag2agent.bootstrap.mq;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.service.IngestPipelineService;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.nio.charset.StandardCharsets;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
@@ -32,14 +33,17 @@ public class RocketMqConsumerConfig {
     @Bean(initMethod = "start", destroyMethod = "shutdown")
     public DefaultMQPushConsumer ingestConsumer(
             @Value("${ROCKETMQ_NAMESRV:localhost:19876}") String namesrvAddr,
+            @Value("${RAG2AGENT_MQ_MAX_RECONSUME_TIMES:16}") int maxReconsumeTimes,
             IngestPipelineService pipelineService,
             ObservationRegistry observationRegistry,
-            ObjectMapper objectMapper) throws Exception {
+            ObjectMapper objectMapper,
+            MeterRegistry meterRegistry) throws Exception {
         DefaultMQPushConsumer consumer = new DefaultMQPushConsumer("rag2agent-ingest-consumer");
         consumer.setNamesrvAddr(namesrvAddr);
         consumer.subscribe(RocketMqProducerConfig.INGEST_TOPIC, "*"); //订阅此生产者的消息
         consumer.setConsumeThreadMin(2);
         consumer.setConsumeThreadMax(4);
+        consumer.setMaxReconsumeTimes(Math.max(1, Math.min(maxReconsumeTimes, 16)));
         consumer.registerMessageListener((MessageListenerConcurrently) (messages, context) -> {
             for (MessageExt message : messages) {
                 try {
@@ -56,6 +60,8 @@ public class RocketMqConsumerConfig {
                     }
                     log.info("入库任务消费完成: documentId={}, traceId={}", documentId, traceId);
                 } catch (Exception e) {
+                    meterRegistry.counter("rag2agent.mq.consume.retries", "topic", message.getTopic(),
+                            "attempt", String.valueOf(message.getReconsumeTimes())).increment();
                     log.error("入库消费失败，稍后重试: documentId={}, traceId={}",
                             new String(message.getBody(), StandardCharsets.UTF_8),
                             message.getUserProperty("traceId"), e);

@@ -2,7 +2,7 @@
 
 RAG2Agent 是一个面向企业知识库问答和 Agent 工作流的 Java + Vue 演示工程。当前版本已经跑通“用户登录 → 上传 PDF → 异步入库 → 混合检索 → 带引用回答 → Agent 工具审批 → 异步评测”的本地闭环，重点验证可靠性、可观测性和任务恢复边界。
 
-这仍是一个需要本地中间件的工程样例，不是开箱即用的单文件产品。当前 ACL 是知识库 owner 级别，Neo4j 和 MCP 只完成基础设施/模块预留，GraphRAG 和远程 MCP transport 尚未实现。
+这仍是一个需要本地中间件的工程样例，不是开箱即用的单文件产品。当前 ACL 是知识库 owner 级别，Neo4j 仍为基础设施预留；MCP 已提供项目内 JSON-RPC HTTP 子集，GraphRAG 尚未实现。
 
 ## 当前能力
 
@@ -30,7 +30,7 @@ RAG2Agent 是一个面向企业知识库问答和 Agent 工作流的 Java + Vue 
 - `framework`：通用响应、错误处理、Redis、鉴权和持久化基础设施
 - `infra-ai`：按 capability 选择 active provider；Chat、Embedding、Rerank、VectorStore 接口和客户端
 - `rag-core`：解析、切块、检索、融合、重排和 Prompt 相关核心能力
-- `mcp-server`：MCP 远程工具发现/调用契约；bootstrap 已有适配和本地 fallback，当前没有完整网络传输实现
+- `mcp-server`：MCP 远程工具发现/调用契约与 HTTP JSON-RPC 服务；bootstrap 提供远程适配和本地 fallback，完整官方 Streamable HTTP 会话协商仍不在范围内
 - `bootstrap`：Spring Boot 启动模块、Controller、Agent、评测、MQ 消费和数据库访问
 - `web`：Vue 前端
 
@@ -235,9 +235,9 @@ mvn -pl rag-core -am test -Dtest=RealPdfVerifyIT
 
 以下内容已记录在 [docs/todo.md](docs/todo.md)，README 不把它们当作已交付能力：
 
-- 已接入 provider usage 与估算 token 校准指标、AI usage 账本（含缓存 token/价格版本字段）和中文检索：默认无扩展时使用二元切分，启用 `rag2agent-postgres:pg17-zhparser` 后使用 `zhparser`；固定 MIRACL zh 子集验证了关键词和混合检索收益。真实价格数值仍按环境变量注入。
-- SSE 多行事件、半包和断线重连协议尚未完成；当前 SSE 适合本地演示，不应假设断线后自动续传。
-- Agent 已有同一 session 的并发锁、最大步数降级和完整工具审计，但 `clientRequestId` 级别的完成后幂等与长任务锁租约续期仍待补齐。
+- 已接入 provider usage 与估算 token 校准指标、AI usage 账本（含缓存 token/价格版本字段）和中文检索：DeepSeek 默认使用官方 USD 分时价格，SiliconFlow BGE 模型按官方免费价记录，仍可由环境变量覆盖；默认无扩展时使用二元切分，启用 `rag2agent-postgres:pg17-zhparser` 后使用 `zhparser`；固定 MIRACL zh 子集验证了关键词和混合检索收益。完整验收证据见 [V2 集成验收记录](docs/v2-validation-report.md)。
+- SSE 已支持 Redis Stream + `Last-Event-ID` 增量回放；超出保留窗口时回退到 run 状态查询，多行事件/半包兼容性和生产级长连接治理仍需继续补强。
+- Agent 已有同一 session 的并发锁、最大步数降级和完整工具审计；`clientRequestId` 请求级幂等与长任务锁租约续期已落地。
 - 现有 ACL 是 owner-only，不是带共享、协作组、只读/可写/管理员角色的多租户模型；输入防御、资源配额和队列积压治理也仍在 TODO。
 - Neo4j 仅随 Compose 启动并保留端口，尚无实体抽取、Cypher 查询或 GraphRAG 检索链路；当前检索基线是向量 + 关键词。
 - 没有 SQLite 替代方案或 GraalVM 单文件发行物。当前 SQL 依赖 PostgreSQL 的 pgvector、JSONB、数组和全文能力，完整 Compose 是本地演示前提。

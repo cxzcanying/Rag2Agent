@@ -96,23 +96,49 @@ rag2agent:
       - rag-core
       - mcp-server
       - bootstrap
+  mcp:
+    remote:
+      enabled: ${RAG2AGENT_MCP_REMOTE_ENABLED:false}
+      endpoint: ${RAG2AGENT_MCP_REMOTE_ENDPOINT:http://localhost:19090/mcp}
+      token: ${RAG2AGENT_MCP_REMOTE_TOKEN:dev-mcp-token}
+      scopes: ${RAG2AGENT_MCP_REMOTE_SCOPES:mcp:read}
   ai:
     cost:
       prices:
-        deepseek/deepseek-v4-flash:
-          version: ${DEEPSEEK_FLASH_PRICE_VERSION:yaml-2026-08}
-          currency: ${DEEPSEEK_PRICE_CURRENCY:CNY}
-          prompt-per-million: ${DEEPSEEK_FLASH_PROMPT_PRICE:0}
-          completion-per-million: ${DEEPSEEK_FLASH_COMPLETION_PRICE:0}
-          cache-read-per-million: ${DEEPSEEK_FLASH_CACHE_READ_PRICE:0}
+        "[deepseek/deepseek-v4-flash]":
+          version: ${DEEPSEEK_FLASH_PRICE_VERSION:deepseek-official-2026-09-01-usd}
+          currency: ${DEEPSEEK_PRICE_CURRENCY:USD}
+          prompt-per-million: ${DEEPSEEK_FLASH_PROMPT_PRICE:0.22}
+          completion-per-million: ${DEEPSEEK_FLASH_COMPLETION_PRICE:0.66}
+          cache-read-per-million: ${DEEPSEEK_FLASH_CACHE_READ_PRICE:0.007}
           cache-write-per-million: ${DEEPSEEK_FLASH_CACHE_WRITE_PRICE:0}
-        deepseek/deepseek-v4-pro:
-          version: ${DEEPSEEK_PRO_PRICE_VERSION:yaml-2026-08}
-          currency: ${DEEPSEEK_PRICE_CURRENCY:CNY}
-          prompt-per-million: ${DEEPSEEK_PRO_PROMPT_PRICE:0}
-          completion-per-million: ${DEEPSEEK_PRO_COMPLETION_PRICE:0}
-          cache-read-per-million: ${DEEPSEEK_PRO_CACHE_READ_PRICE:0}
+          peak-multiplier: ${DEEPSEEK_PEAK_PRICE_MULTIPLIER:2}
+          peak-windows-utc: "${DEEPSEEK_PEAK_WINDOWS_UTC:01:00-04:00,06:00-10:00}"
+          peak-weekdays-only: true
+        "[deepseek/deepseek-v4-pro]":
+          version: ${DEEPSEEK_PRO_PRICE_VERSION:deepseek-official-2026-09-01-usd}
+          currency: ${DEEPSEEK_PRICE_CURRENCY:USD}
+          prompt-per-million: ${DEEPSEEK_PRO_PROMPT_PRICE:0.66}
+          completion-per-million: ${DEEPSEEK_PRO_COMPLETION_PRICE:1.98}
+          cache-read-per-million: ${DEEPSEEK_PRO_CACHE_READ_PRICE:0.022}
           cache-write-per-million: ${DEEPSEEK_PRO_CACHE_WRITE_PRICE:0}
+          peak-multiplier: ${DEEPSEEK_PEAK_PRICE_MULTIPLIER:2}
+          peak-windows-utc: "${DEEPSEEK_PEAK_WINDOWS_UTC:01:00-04:00,06:00-10:00}"
+          peak-weekdays-only: true
+        "[siliconflow/BAAI/bge-m3]":
+          version: ${SILICONFLOW_BGE_M3_PRICE_VERSION:siliconflow-official-2026-09-01-free}
+          currency: ${SILICONFLOW_PRICE_CURRENCY:USD}
+          prompt-per-million: ${SILICONFLOW_BGE_M3_PROMPT_PRICE:0}
+          completion-per-million: 0
+          cache-read-per-million: 0
+          cache-write-per-million: 0
+        "[siliconflow/BAAI/bge-reranker-v2-m3]":
+          version: ${SILICONFLOW_RERANK_PRICE_VERSION:siliconflow-official-2026-09-01-free}
+          currency: ${SILICONFLOW_PRICE_CURRENCY:USD}
+          prompt-per-million: ${SILICONFLOW_RERANK_PROMPT_PRICE:0}
+          completion-per-million: 0
+          cache-read-per-million: 0
+          cache-write-per-million: 0
     active-chat-provider: ${RAG2AGENT_ACTIVE_CHAT_PROVIDER:deepseek}
     active-embedding-provider: ${RAG2AGENT_ACTIVE_EMBEDDING_PROVIDER:siliconflow}
     active-rerank-provider: ${RAG2AGENT_ACTIVE_RERANK_PROVIDER:siliconflow}

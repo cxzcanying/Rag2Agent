@@ -52,25 +52,12 @@
 
 ### 3.1 `A1` SSE 断线恢复协议
 
-**当前边界**：已能恢复 run 的最终状态，但不保存逐 token 事件，无法从断点继续增量内容。
+**当前实现**：Redis Stream 保存结构化 SSE 事件，客户端使用 `Last-Event-ID` 请求缺口，服务端按 run 权限回放增量事件。
 
-**已实现：客户端重试 + 服务端 run 查询（A1-R）**
+- [x] 每个 run 的 SSE 事件持久化 `eventId`，断线后只返回断点之后的事件；实时事件与异常事件走同一持久化路径。
+- [x] `/api/agent/runs/{runId}/events` 支持 `Last-Event-ID`，前端记录最后事件 ID 并调用回放接口。
 
-- [x] SSE 首事件返回 `runId`，客户端断线后查询 `GET /api/agent/runs/{runId}` 恢复最终状态。
-
-- 服务端查询已持久化的最终状态，不缓存完整 token 流，也不引入事件序号和重放队列。
-- 优点：改动小、依赖少、不会重复执行工具，适合当前 Agent 已有 run 状态持久化的实现。
-- 缺点：无法恢复到精确 token 位置；断线期间生成中的增量内容会丢失，客户端只能看到最终答案或阶段状态。
-- 适用：单机 Demo、内部系统、对逐 token 连续性要求不高的场景。
-- 实现代价：低，主要涉及 SSE 首事件、run 状态查询和前端退避重试。
-
-**完整选项：事件序号重放（A1-F）**
-
-- 每个 SSE 事件持久化 `eventId`，客户端带 `Last-Event-ID` 恢复，服务端重放缺口。
-- 优点：可精确恢复事件顺序，用户体验接近不中断；便于审计和问题回放。
-- 缺点：需要事件存储、过期清理、重放幂等和并发订阅控制；存储量、实现复杂度和运维成本明显增加。
-- 适用：生产级长回答、移动网络不稳定、需要完整审计或断点续传的场景。
-- 实现代价：高，需要新增事件模型或 Redis Stream，并定义事件保留时长。
+保留窗口由 Redis Stream TTL 控制，超出窗口时客户端仍可通过 run 状态接口获得最终结果。
 
 ### 3.2 `A2` 动态配置
 
@@ -97,11 +84,11 @@
 
 ### 3.3 `A3` Token 计数与成本估算
 
-**当前边界**：上下文预算仍使用字符估算；实际 tokenizer 校准和可对账价格账本留待后续。
+**当前边界**：上下文预算仍使用字符估算；账本已按供应商实际 usage 和官方分时价格计算，tool schema 的 tokenizer 偏差仍需更多真实样本校准。
 
 **已实现：provider/model Token 与静态价格表（A3-S）**
 
-- [x] 已记录 provider/model 的实际 usage token、字符估算 token，并按 YAML 价格配置输出成本指标。
+- [x] 已记录 provider/model 的实际 usage token、字符估算 token，并按官方价格配置输出成本指标；DeepSeek 工作日 peak/off-peak 自动切换，SiliconFlow 当前 BGE 模型按官方免费价记录。
 
 - `TokenCostService` 按 provider/model 记录供应商返回的实际 usage，并按字符数估算请求 token。
 - 价格从 YAML 的 provider/model 配置读取；未配置价格时只记录 token，不伪造金额。
@@ -216,7 +203,7 @@
 ### 4.1 真实 provider 与评测
 
 - [x] 真实 tokenizer 与 provider usage 校准（基础链路）：按中文/ASCII/代码/JSON 分段估算，并记录 provider 实际 usage 与估算值的 ratio/delta；tool schema 仍需真实 provider 样本校准。
-- [x] 真实 provider 成本账本（可对账骨架）：记录 provider/model、实际与估算 token、缓存 token、价格版本和币种；价格数值与生效规则由环境变量注入，待产品确认后填写。
+- [x] 真实 provider 成本账本：记录 provider/model、实际与估算 token、缓存 token、价格版本和币种；已用真实请求验证非零 USD 金额及 off-peak 版本。
 - [ ] 公开评测回归：准备 50-100 条真实知识库金标样本，比较 Hit@K/MRR、Faithfulness、Answer Correctness。
 - [ ] HyDE/Query Rewriting：在同一评测集上做 A/B，确认收益与额外成本后再接入。
 - [x] 中文分词检索零依赖回退基线：中文查询使用二元切分召回并保留 ILIKE 精确命中。
@@ -229,15 +216,15 @@
 
 ### 4.2 分布式链路与可靠性
 
-- [ ] RocketMQ producer→consumer 在 Jaeger 中验证真实父子 span 关系。
+- [x] RocketMQ producer→consumer 在 Jaeger 中验证真实父子 span 关系。
 - [ ] 跨实例熔断状态：选择 Redis 共享状态、网关熔断或保持实例级隔离。
-- [ ] SSE 断线重连：从 `A1-R/A1-F` 中选择协议后实现。
+- [x] SSE 断线重连：Redis Stream + `Last-Event-ID` 增量回放已实现并实测。
 - [ ] provider/model 级重试、熔断和超时动态刷新：从 `A2-L/A2-C` 中选择配置载体。
-- [ ] 入库锁与消息重试的完整故障演练：确认锁过期、消费者重平衡和死信恢复行为。
+- [x] 入库锁与消息重试故障演练：已验证锁冲突指标、锁过期恢复、消息重试、消费者重平衡和死信主题读取回投。
 
 ### 4.3 外部协议与数据模型
 
-- [ ] 真实 MCP transport、认证、远端权限和超时行为：先确定 HTTP/SSE、Streamable HTTP 或 stdio 范围。
+- [x] 真实 MCP HTTP transport、Bearer 认证、scope 权限和越权拒绝已验证；当前服务范围为项目内 JSON-RPC HTTP 子集。
 - [ ] GraphRAG：确认图抽取模型、Cypher 查询、Neo4j 故障回退和索引同步策略。
 - [ ] 多租户：确定成员角色、资源配额、tenant 维度和数据迁移方案。
 - [ ] 评测数据飞轮：确定 Prompt/config 版本、人工批准、反馈脱敏和回滚流程。
