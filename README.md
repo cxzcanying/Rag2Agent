@@ -1,10 +1,32 @@
 # RAG2Agent
 
-RAG2Agent 是一个面向企业知识库问答和 Agent 工作流的 Java + Vue 演示工程。当前版本已经跑通“用户登录 → 上传 PDF → 异步入库 → 混合检索 → 带引用回答 → Agent 工具审批 → 异步评测”的本地闭环，重点验证可靠性、可观测性和任务恢复边界。
+> 企业级 RAG + 可控 Agent 后端工程。基于 Java 21 + Spring Boot 3.5 的多模块后端与 Vue 3 前端，本地跑通「登录 → 上传 PDF → 异步入库 → 混合检索 → 带引用回答 → Agent 工具审批 → 异步评测」完整闭环，重点验证可靠性、可观测性和任务恢复边界。
 
-这仍是一个需要本地中间件的工程样例，不是开箱即用的单文件产品。当前 ACL 是知识库 owner 级别，Neo4j 仍为基础设施预留；MCP 已提供项目内 JSON-RPC HTTP 子集，GraphRAG 尚未实现。
+![Java](https://img.shields.io/badge/Java-21-007396?logo=openjdk&logoColor=white)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5.7-6DB33F?logo=spring&logoColor=white)
+![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)
 
-## 当前能力
+这是一个依赖本地中间件的工程样例，不是开箱即用的单文件产品。当前权限边界是知识库 owner 级别，Neo4j 仍属基础设施预留；MCP 已提供项目内 JSON-RPC HTTP 子集，GraphRAG 尚未实现。
+
+## 目录
+
+- [功能特性](#功能特性)
+- [技术栈](#技术栈)
+- [架构与模块](#架构与模块)
+- [快速开始](#快速开始)
+- [配置说明](#配置说明)
+- [API 概览](#api-概览)
+- [异步评测](#异步评测)
+- [测试与验证](#测试与验证)
+- [CI](#ci)
+- [项目结构](#项目结构)
+- [文档](#文档)
+- [边界与路线图](#边界与路线图)
+- [参与贡献](#参与贡献)
+- [许可证](#许可证)
+
+## 功能特性
 
 | 领域 | 已实现 |
 | --- | --- |
@@ -18,63 +40,93 @@ RAG2Agent 是一个面向企业知识库问答和 Agent 工作流的 Java + Vue 
 | 评测 | 用例导入、单配置/矩阵提交；异步 run、进度查询、逐题结果、取消、失败/超时、重启恢复和 `Idempotency-Key` 幂等 |
 | 前端 | Vue 3 + Vite；登录、知识库/文档、对话审批、评测进度和取消页面 |
 
-## 技术栈与模块
+## 技术栈
 
-- Java 21、Spring Boot 3.5、Maven 多模块
-- Vue 3、Vite、Element Plus（`web/`）
-- PostgreSQL 17 + pgvector/pg_trgm、Redis 7.4、MinIO、RocketMQ 5.3.2、Neo4j 5、Jaeger 1.60
-- `infra-ai` 提供 Chat、Embedding、Rerank 抽象，当前配置了 DeepSeek 和 SiliconFlow
+| 分类 | 技术 | 版本 / 说明 |
+| --- | --- | --- |
+| 后端语言 | Java | 21 |
+| 后端框架 | Spring Boot | 3.5.7（Maven 多模块） |
+| ORM | MyBatis-Plus | 3.5.14 |
+| 鉴权 | Sa-Token | 1.44.0 |
+| API 文档 | springdoc-openapi | 2.8.14 |
+| HTTP 客户端 | OkHttp | 4.12.0 |
+| 前端 | Vue 3 + Vite | Vue 3.5.22 / Vite 7.1.12 |
+| UI 组件 | Element Plus | 2.14.4 |
+| 数据库 | PostgreSQL | 17（+ pgvector / pg_trgm，可选 zhparser） |
+| 缓存 / 限流 | Redis | 7.4（Alpine） |
+| 对象存储 | MinIO | 2025-09-07 release |
+| 消息队列 | RocketMQ | 5.3.2 |
+| 图数据库 | Neo4j | 5（Community，当前仅预留） |
+| 链路追踪 | Jaeger | 1.60（all-in-one） |
+| 覆盖率 / 校验 | Spotless | 2.46.1（代码格式校验） |
 
-模块职责：
+`infra-ai` 提供 Chat、Embedding、Rerank 抽象，当前配置了 DeepSeek（chat）和 SiliconFlow（embedding / rerank / 定价）。
 
-- `framework`：通用响应、错误处理、Redis、鉴权和持久化基础设施
-- `infra-ai`：按 capability 选择 active provider；Chat、Embedding、Rerank、VectorStore 接口和客户端
-- `rag-core`：解析、切块、检索、融合、重排和 Prompt 相关核心能力
-- `mcp-server`：MCP 远程工具发现/调用契约与 HTTP JSON-RPC 服务；bootstrap 提供远程适配和本地 fallback，完整官方 Streamable HTTP 会话协商仍不在范围内
-- `bootstrap`：Spring Boot 启动模块、Controller、Agent、评测、MQ 消费和数据库访问
-- `web`：Vue 前端
+## 架构与模块
 
-## 快速启动
+多模块 Maven 工程，各模块职责如下：
+
+| 模块 | 职责 |
+| --- | --- |
+| `framework` | 通用响应、错误处理、Redis、鉴权和持久化基础设施 |
+| `infra-ai` | 按 capability 选择 active provider；Chat、Embedding、Rerank、VectorStore 接口和客户端 |
+| `rag-core` | 解析、切块、检索、融合、重排和 Prompt 相关核心能力 |
+| `mcp-server` | MCP 远程工具发现/调用契约与 HTTP JSON-RPC 服务 |
+| `bootstrap` | Spring Boot 启动模块、Controller、Agent、评测、MQ 消费和数据库访问 |
+| `web` | Vue 3 前端 |
+
+依赖主线：`framework` / `infra-ai` 为底座，`rag-core` 依赖 `infra-ai`，`bootstrap` 聚合全部并对外提供服务，`web` 调用 `bootstrap`。完整选型、演进路线与模块边界参见 [docs/tech-selection.md](docs/tech-selection.md)。
+
+## 快速开始
 
 ### 前置条件
 
 - Windows + Docker Desktop
-- JDK 21 和 Maven 3.9+
-- Node.js 18+（仅运行前端时需要）
+- JDK 21 与 Maven 3.9+
+- Node.js 20+（仅运行前端时需要）
 - DeepSeek Chat key；SiliconFlow key 用于 BGE-M3 Embedding 和 Rerank
 
 ### 后端与中间件
 
 在项目根目录执行：
 
-~~~powershell
+```powershell
 Copy-Item -LiteralPath .env.example -Destination .env
 # 编辑 .env，至少填写 DEEPSEEK_API_KEY 和 SILICONFLOW_API_KEY
+
 # Demo：PostgreSQL + Redis + MinIO（默认）
 $env:RAG2AGENT_MQ_ENABLED="false"
 docker compose up -d
-# 完整 V2：追加 RocketMQ、Neo4j、Jaeger
+
+# 完整拓扑：追加 RocketMQ、Neo4j、Jaeger
 docker compose --profile full up -d
+
 # 完整异步入库需开启 RocketMQ（PowerShell）
 $env:RAG2AGENT_MQ_ENABLED="true"
 mvn -pl bootstrap spring-boot:run
-~~~
+```
 
-`application.yml` 默认使用 `dev` profile，连接宿主机映射端口。首次启动会由 PostgreSQL 初始化脚本创建表；已有 PostgreSQL 数据卷需要手动按顺序执行未执行的初始化脚本（包括 [006_ai_usage_ledger.sql](docker/postgres/init/006_ai_usage_ledger.sql)）。初始化脚本只会在新卷首次启动时自动执行；复用旧卷时请检查并手动补跑缺失迁移脚本。
+`application.yml` 默认使用 `dev` profile，连接宿主机映射端口。首次启动会由 PostgreSQL 初始化脚本自动建表；复用旧数据卷时需手动按顺序补跑未执行的初始化脚本（包括 [006_ai_usage_ledger.sql](docker/postgres/init/006_ai_usage_ledger.sql)）。初始化脚本只会在新卷首次启动时自动执行。
 
-中文关键词检索默认使用 `RAG2AGENT_CHINESE_SEARCH_MODE=auto`：检测到 `zhparser` 时走 PostgreSQL `tsvector`，否则回退二元切分。要启用 PG17 的 `zhparser` 镜像，先执行 `docker build -t rag2agent-postgres:pg17-zhparser docker/postgres`，再设置 `$env:RAG2AGENT_POSTGRES_IMAGE="rag2agent-postgres:pg17-zhparser"` 后启动 Compose；构建失败时继续使用默认 `pgvector/pg17` 即可。
+中文关键词检索默认使用 `RAG2AGENT_CHINESE_SEARCH_MODE=auto`：检测到 `zhparser` 时走 PostgreSQL `tsvector`，否则回退二元切分。要启用 PG17 的 `zhparser` 镜像：
 
-V2 已落地能力的验收证据见 [docs/v2-validation-report.md](docs/v2-validation-report.md)。
+```powershell
+docker build -t rag2agent-postgres:pg17-zhparser docker/postgres
+$env:RAG2AGENT_POSTGRES_IMAGE="rag2agent-postgres:pg17-zhparser"
+docker compose up -d
+```
+
+构建失败时继续使用默认 `pgvector/pg17` 即可。
 
 ### 前端
 
 另开终端执行：
 
-~~~powershell
+```powershell
 Set-Location -LiteralPath .\web
 npm install
 npm run dev
-~~~
+```
 
 Vite 开发服务器会将 `/api` 代理到 `http://localhost:18080`。启动后打开终端输出的前端地址即可。
 
@@ -90,22 +142,22 @@ Vite 开发服务器会将 `/api` 代理到 `http://localhost:18080`。启动后
 | Neo4j | 17474 / 17687 | Browser / Bolt；当前仅预留 |
 | Jaeger | 16686、4317、4318 | UI / OTLP gRPC / OTLP HTTP |
 
-项目刻意使用高位端口，避免 Windows 动态保留端口导致“端口占用但查不到进程”。端口和中间件注意事项见 [docs/pitfalls-and-verification.md](docs/pitfalls-and-verification.md)。
+项目刻意使用高位端口，避免 Windows 动态保留端口导致「端口占用但查不到进程」。端口与中间件注意事项见 [docs/pitfalls-and-verification.md](docs/pitfalls-and-verification.md)。
 
 Compose 服务健康检查：
 
-~~~powershell
+```powershell
 pwsh ./scripts/compose-health.ps1       # Demo profile
 pwsh ./scripts/compose-health.ps1 -Full # 包含 RocketMQ、Neo4j、Jaeger
-~~~
+```
 
-## 配置与安全
+## 配置说明
 
 `.env` 已被 `.gitignore` 忽略，禁止把真实密钥提交到 Git。配置由 `DotenvEnvironmentPostProcessor` 从项目根目录向上查找 `.env`，系统环境变量优先。
 
 常用变量：
 
-~~~text
+```text
 DEEPSEEK_API_KEY=...
 DEEPSEEK_MODEL=deepseek-v4-flash
 DEEPSEEK_MODEL_PRO=deepseek-v4-pro
@@ -119,15 +171,17 @@ RAG2AGENT_TOOL_TIMEOUT_MILLIS=10000
 ROCKETMQ_NAMESRV=localhost:19876
 RAG2AGENT_EMBEDDING_CACHE_ENABLED=true
 RAG2AGENT_RATE_LIMIT=60
-~~~
+```
+
+`RAG2AGENT_MQ_ENABLED`、`RAG2AGENT_CHINESE_SEARCH_MODE`、`RAG2AGENT_EMBEDDING_*`、`RAG2AGENT_RATE_LIMIT_*`、`RAG2AGENT_AI_RESILIENCE_*`、`RAG2AGENT_MCP_REMOTE_*` 等均可在 `.env` 或环境变量中覆盖，默认值见 `bootstrap/src/main/resources/application.yml`。价格相关变量以 `DEEPSEEK_*_PRICE_*` / `SILICONFLOW_*_PRICE_*` 前缀为主，默认使用官方分时 / 免费用量口径。
 
 Embedding 缓存 key 使用 provider、model、维度和文本 hash 做内容寻址，不包含文档版本号，因此同一文本可跨文档版本复用；模型版本变更时应调整 model 配置或清理对应缓存空间，不能把旧模型结果当作新模型结果。
 
 ## API 概览
 
-除健康检查、版本和 provider 查询外，业务接口需要登录后的 Sa-Token：
+除健康检查、版本和 provider 查询外，业务接口需要登录后的 Sa-Token；
 
-~~~text
+```text
 POST /api/auth/register
 POST /api/auth/login
 GET  /api/auth/me
@@ -156,7 +210,7 @@ GET  /api/version
 GET  /api/ai/providers
 GET  /actuator/health
 GET  /actuator/prometheus
-~~~
+```
 
 Swagger UI：`http://localhost:18080/swagger-ui.html`；OpenAPI JSON：`http://localhost:18080/v3/api-docs`。
 
@@ -164,13 +218,13 @@ Swagger UI：`http://localhost:18080/swagger-ui.html`；OpenAPI JSON：`http://l
 
 评测提交接口不会等待全部用例完成，而是立即返回 `runId`：
 
-~~~http
+```http
 POST /api/evaluations/runs
 Idempotency-Key: 8d8b4e1e-9f6f-4fc3-a8ba-2e5b0a4fbe31
 Content-Type: application/json
-~~~
+```
 
-~~~json
+```json
 {
   "kbId": 1,
   "name": "向量基线",
@@ -184,7 +238,7 @@ Content-Type: application/json
     "timeoutSeconds": 3600
   }
 }
-~~~
+```
 
 后台任务按 `QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED/TIMEOUT` 更新数据库。客户端轮询 `GET /runs/{runId}` 获取状态、完成数、指标和错误信息，再按需读取 `/results` 的逐题结果。客户端断开不会停止后台任务；应用重启后会从 `eval_run` 中恢复排队/运行中的任务，已完成的 `eval_case_result` 不会重复执行。
 
@@ -192,7 +246,7 @@ Content-Type: application/json
 
 导入用例格式：
 
-~~~json
+```json
 {
   "kbId": 1,
   "cases": [
@@ -203,7 +257,7 @@ Content-Type: application/json
     }
   ]
 }
-~~~
+```
 
 `evaluateGeneration=true` 会额外调用回答模型和裁判模型，耗时及额度明显增加，建议使用异步查询而不是等待 HTTP 请求超时。
 
@@ -211,27 +265,62 @@ Content-Type: application/json
 
 后端业务测试（必须带 `-am`）：
 
-~~~powershell
+```powershell
 mvn -pl bootstrap -am test
-~~~
+```
 
 前端构建：
 
-~~~powershell
+```powershell
 Set-Location -LiteralPath .\web
 npm run build
-~~~
+```
 
 真实模型和真实 PDF 验证需要额外的 API key、Docker 服务或环境变量：
 
-~~~powershell
+```powershell
 mvn -pl bootstrap -am test -Dtest=AiClientRealIT
 mvn -pl rag-core -am test -Dtest=RealPdfVerifyIT
-~~~
+```
 
 在未启动 MinIO 的机器上，部分 Spring context 测试可能失败；这属于外部依赖未就绪，不等同于业务单测失败。全仓 `spotless:check` 还可能被既有 `.eval-tools`、`node_modules` 等非源码目录影响，验证时应以 Maven 测试和前端构建为主。
 
-## 当前限制与后续方向
+## CI
+
+GitHub Actions（`.github/workflows/ci.yml`）针对 `main` 分支的 push / pull request：
+
+- **backend**：`setup-java`（Temurin 21）→ `mvn -B -pl infra-ai,rag-core -am test`（确定性单测）→ `mvn -B -pl bootstrap -am -DskipTests package`（reactor 编译打包）。
+- **frontend**：`setup-node`（Node 20）→ `npm ci` → `npm run build`。
+
+真实模型集成测试（`AiClientRealIT`）和真实 PDF 验证（`RealPdfVerifyIT`）需要本地依赖或环境变量，未纳入 CI。
+
+## 项目结构
+
+```text
+RAG2Agent/
+├── bootstrap/          # Spring Boot 启动：Controller、Agent、评测、MQ 消费、数据访问
+├── framework/          # 通用响应、错误、Redis、鉴权、持久化基础设施
+├── infra-ai/           # AI provider 抽象：Chat/Embedding/Rerank/VectorStore
+├── rag-core/           # 解析、切块、检索、融合、重排、Prompt 核心
+├── mcp-server/         # MCP 远程工具发现/调用契约与 HTTP JSON-RPC 服务
+├── web/                # Vue 3 前端
+├── docker/             # 中间件镜像与 PostgreSQL 初始化脚本（001-007）
+├── scripts/            # 健康检查、评测数据准备/运行脚本
+├── docs/               # 技术选型、开发计划、翻车记录、TODO、评测清单等
+└── .github/workflows/  # CI
+```
+
+## 文档
+
+- [docs/tech-selection.md](docs/tech-selection.md)：技术选型、模块边界、配置和演进路线
+- [docs/development-plan.md](docs/development-plan.md)：阶段计划与实际落地状态
+- [docs/pitfalls-and-verification.md](docs/pitfalls-and-verification.md)：端口、中间件和真实验收翻车记录
+- [docs/observability.md](docs/observability.md)：指标命名、标签和 `outcome` 枚举约定
+- [docs/todo.md](docs/todo.md)：按优先级维护的工程问题、风险和后续任务
+- [docs/evaluation-checklist.md](docs/evaluation-checklist.md)：评测数据集、指标和可复现实验入口
+- [docs/v2-validation-report.md](docs/v2-validation-report.md)：V2 集成验收记录与真实证据
+
+## 边界与路线图
 
 以下内容已记录在 [docs/todo.md](docs/todo.md)，README 不把它们当作已交付能力：
 
@@ -244,15 +333,10 @@ mvn -pl rag-core -am test -Dtest=RealPdfVerifyIT
 - 评测结果目前用于人工比较切块/路由/重排配置，尚无自动调参、线上点赞/点踩反馈回流、Bad Case 自动入集的数据飞轮。
 - Agent 当前是带工具调用的状态机，尚未实现完整 Plan-and-Execute、Self-Reflection 或长期/情景记忆。
 
-## 文档索引
+## 参与贡献
 
-- [docs/tech-selection.md](docs/tech-selection.md)：技术选型、模块边界、配置和演进路线
-- [docs/development-plan.md](docs/development-plan.md)：阶段计划与实际落地状态
-- [docs/pitfalls-and-verification.md](docs/pitfalls-and-verification.md)：端口、中间件和真实验收翻车记录
-- [docs/observability.md](docs/observability.md)：指标命名、标签和 `outcome` 枚举约定
-- [docs/todo.md](docs/todo.md)：按优先级维护的工程问题、风险和后续任务
-- [docs/evaluation-checklist.md](docs/evaluation-checklist.md)：评测数据集、指标和可复现实验入口
+欢迎通过 Issue / PR 参与。仓库采用 Conventional Commits，提交前缀使用 `feat:` / `fix:` / `docs:` / `chore:` / `refactor:` / `test:`；提交前确认 git 状态不含 `.env` 或任何 `sk-` 开头的密钥。涉及数据库表结构变更时，需同步更新 `docker/postgres/init/*.sql`。
 
-## License
+## 许可证
 
 项目当前未声明独立开源许可证；如需对外发布，请先补充许可证和第三方依赖清单。
