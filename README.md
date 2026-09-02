@@ -64,7 +64,7 @@ mvn -pl bootstrap spring-boot:run
 
 中文关键词检索默认使用 `RAG2AGENT_CHINESE_SEARCH_MODE=auto`：检测到 `zhparser` 时走 PostgreSQL `tsvector`，否则回退二元切分。要启用 PG17 的 `zhparser` 镜像，先执行 `docker build -t rag2agent-postgres:pg17-zhparser docker/postgres`，再设置 `$env:RAG2AGENT_POSTGRES_IMAGE="rag2agent-postgres:pg17-zhparser"` 后启动 Compose；构建失败时继续使用默认 `pgvector/pg17` 即可。
 
-V2 已落地能力与面试用未来演进路线见 [docs/interview-evolution.md](docs/interview-evolution.md)。
+V2 已落地能力的验收证据见 [docs/v2-validation-report.md](docs/v2-validation-report.md)。
 
 ### 前端
 
