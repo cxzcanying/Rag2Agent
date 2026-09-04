@@ -10,10 +10,13 @@ import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.List;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -118,10 +121,7 @@ public class QueryEmbeddingCache {
         // ========== 第二步：生成缓存 Key ==========
         // Key 格式：embedding:{模型版本}:{维度}:{provider}:{model}:{query摘要}
         // 使用 SHA-256 对 query 做哈希，避免 query 过长或包含特殊字符
-        String key = "embedding:" + properties.getModelVersion() + ":" + properties.getDimension() + ":"
-                + provider + ":"
-                + (model == null ? "default" : model) + ":"
-                + sha256(query.trim());
+        String key = key(provider, model, query);
 
         // ========== 第三步：查询 L1 本地缓存 ==========
         List<Float> local = localCache.getIfPresent(key);
@@ -164,6 +164,100 @@ public class QueryEmbeddingCache {
             // 防止移除被其他线程替换的条目
             inFlight.remove(key, candidate);
         }
+    }
+
+    /**
+     * 批量获取文本向量，供入库阶段缓存"正文切片"向量。
+     *
+     * <p>语义与 {@link #getOrCompute} 一致，只是从"单个文本"扩展为"一批文本"：
+     * <ul>
+     *   <li>key 同样按 provider/model/modelVersion/dimension + 文本摘要隔离，模型升级后旧 key 不命中；</li>
+     *   <li>只对未命中的文本调用一次 {@code batchLoader}，保持 Embedding API 的批量语义；</li>
+     *   <li>切片向量是入库时按文档串行计算，跨文档重复片段的并发合并不是瓶颈，故不做请求合并。
+     *       （ponytail: 若将来出现跨文档高并发重复片段，再补 in-flight 合并。）</li>
+     * </ul>
+     *
+     * @param provider Embedding 服务提供商
+     * @param model 使用的模型名称
+     * @param texts 待向量化文本列表，顺序与返回向量一一对应
+     * @param batchLoader 对"未命中文本"的批量回源加载器，返回与输入顺序一致的向量
+     * @return 与 {@code texts} 一一对应的向量列表（元素不可变）
+     */
+    public List<List<Float>> getOrComputeBatch(String provider, String model, List<String> texts,
+            Function<List<String>, List<List<Float>>> batchLoader) {
+        if (!properties.isEnabled()) {
+            return batchLoader.apply(texts);
+        }
+        int size = texts.size();
+        List<String> keys = new ArrayList<>(size);
+        for (String text : texts) {
+            keys.add(key(provider, model, text));
+        }
+
+        // ======== L1 命中分发：命中的直接用，未命中的记下下标 ========
+        List<List<Float>> result = new ArrayList<>(Collections.nCopies(size, null));
+        List<Integer> missIndexes = new ArrayList<>();
+        for (int i = 0; i < size; i++) {
+            List<Float> local = localCache.getIfPresent(keys.get(i));
+            if (local != null) {
+                result.set(i, local);
+                count("l1", "hit");
+            } else {
+                missIndexes.add(i);
+                count("l1", "miss");
+            }
+        }
+        if (missIndexes.isEmpty()) {
+            return result;
+        }
+
+        // ======== L2 批量命中分发：multiGet 一次取回未命中的 key ========
+        List<Integer> remaining = new ArrayList<>();
+        List<String> missKeys = missIndexes.stream().map(keys::get).toList();
+        try {
+            List<String> cached = redis.opsForValue().multiGet(missKeys);
+            for (int i = 0; i < missIndexes.size(); i++) {
+                String json = cached.get(i);
+                if (json == null) {
+                    remaining.add(missIndexes.get(i));
+                    count("l2", "miss");
+                } else {
+                    List<Float> vector = List.copyOf(objectMapper.readValue(json, VECTOR_TYPE));
+                    localCache.put(keys.get(missIndexes.get(i)), vector);
+                    result.set(missIndexes.get(i), vector);
+                    count("l2", "hit");
+                }
+            }
+        } catch (Exception ignored) {
+            // Redis 异常（连接、序列化失败等）→ 降级，全部未命中交给回源；不影响入库
+            remaining.addAll(missIndexes);
+            count("l2", "error");
+        }
+        if (remaining.isEmpty()) {
+            return result;
+        }
+
+        // ======== 回源：只对仍未命中的文本调一次批量加载 ========
+        List<String> remainingTexts = remaining.stream().map(texts::get).toList();
+        List<List<Float>> loaded = batchLoader.apply(remainingTexts);
+        if (loaded.size() != remaining.size()) {
+            throw new IllegalStateException("Embedding 批量返回数量不匹配: 期望 " + remaining.size()
+                    + " 条，实际 " + loaded.size() + " 条");
+        }
+        for (int i = 0; i < remaining.size(); i++) {
+            List<Float> vector = List.copyOf(loaded.get(i));
+            int index = remaining.get(i);
+            result.set(index, vector);
+            localCache.put(keys.get(index), vector);
+            try {
+                redis.opsForValue().set(keys.get(index), objectMapper.writeValueAsString(vector),
+                        Duration.ofSeconds(properties.getTtlSeconds()));
+            } catch (Exception ignored) {
+                // Redis 写入失败只记录指标，不影响返回；下次请求重新回源
+                count("l2", "write_error");
+            }
+        }
+        return result;
     }
 
     // ==================== L2 缓存或回源加载 ====================
@@ -250,6 +344,18 @@ public class QueryEmbeddingCache {
     }
 
     // ==================== 工具方法 ====================
+
+    /**
+     * 生成缓存 Key。Key 格式：{@code embedding:{modelVersion}:{dimension}:{provider}:{model}:{sha256(text)}}。
+     *
+     * <p>模型版本/维度参与拼 key：换模型或改维度后自然隔离，不会把旧模型的向量当新模型用。
+     */
+    private String key(String provider, String model, String text) {
+        return "embedding:" + properties.getModelVersion() + ":" + properties.getDimension() + ":"
+                + provider + ":"
+                + (model == null ? "default" : model) + ":"
+                + sha256(text.trim());
+    }
 
     /**
      * 计算字符串的 SHA-256 哈希值（十六进制字符串）

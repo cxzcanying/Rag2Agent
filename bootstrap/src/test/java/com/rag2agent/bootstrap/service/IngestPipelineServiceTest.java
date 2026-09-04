@@ -6,6 +6,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rag2agent.bootstrap.config.EmbeddingCacheProperties;
 import com.rag2agent.bootstrap.entity.DocumentMeta;
 import com.rag2agent.bootstrap.mapper.DocumentChunkMapper;
 import com.rag2agent.bootstrap.storage.MinioStorageService;
@@ -27,11 +29,14 @@ class IngestPipelineServiceTest {
         DocumentChunkMapper chunks = mock(DocumentChunkMapper.class);
         EmbeddingClient embedding = mock(EmbeddingClient.class);
         when(embedding.providerName()).thenReturn("test");
+        when(embedding.modelName()).thenReturn("model");
         when(embedding.embed(any())).thenReturn(vectors(16)).thenThrow(new IllegalStateException("upstream"));
+        QueryEmbeddingCache cache = new QueryEmbeddingCache(
+                null, new ObjectMapper(), new EmbeddingCacheProperties(), new SimpleMeterRegistry());
         IngestPipelineService service = new IngestPipelineService(
                 mock(com.rag2agent.bootstrap.mapper.DocumentMetaMapper.class), chunks,
                 mock(MinioStorageService.class), embedding, mock(IngestTaskService.class),
-                mock(PlatformTransactionManager.class), mock(StringRedisTemplate.class));
+                mock(PlatformTransactionManager.class), mock(StringRedisTemplate.class), cache);
 
         DocumentMeta document = new DocumentMeta();
         document.setId(1L);
@@ -55,7 +60,8 @@ class IngestPipelineServiceTest {
                 mock(com.rag2agent.bootstrap.mapper.DocumentMetaMapper.class),
                 mock(DocumentChunkMapper.class), mock(MinioStorageService.class),
                 mock(EmbeddingClient.class), mock(IngestTaskService.class),
-                mock(PlatformTransactionManager.class), mock(StringRedisTemplate.class), registry);
+                mock(PlatformTransactionManager.class), mock(StringRedisTemplate.class), registry,
+                mock(QueryEmbeddingCache.class));
         service.recordLeaseRenewal(0L);
         service.recordLeaseRenewalError();
         service.recordLeaseReleaseError();

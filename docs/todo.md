@@ -237,8 +237,8 @@
 - [x] Agent 审批超时自动终态化：`agent_run` 会一直停在 `WAITING_APPROVAL`，唯一兜底是 Redis 上下文 30 分钟 TTL；到期后点"通过"会因上下文过期而失败，但 run / `tool_call` 不自动置终态，容易积压无人处理。本次修复：新增 `AgentApprovalTimeoutScanner`（每 60s 扫描、默认超时 30 分钟），把超时 run 置为 `FAILED`、挂起的 `tool_call` 置为 `TIMED_OUT`。
 - [x] Agent 工具调用全局硬上限：`executeLoop` 只按 LLM 轮数 `max_iterations`(10) 封顶，单轮可执行多个 toolCall、跨轮可反复调同一工具，副作用次数不受控。本次修复：新增 `rag2agent.agent.max-tool-calls`（默认 20），达到即走 `finalizeAtMaxSteps` 强制总结。
 - [x] 异步入库中断任务恢复：应用在"任务已落库、消息未发送"或"处理中途崩溃"时，任务停在 `PENDING/PARSING/SPLITTING/EMBEDDING` 且无自动补跑；仅靠 MQ 重试 + 手动 `reingest`。本次修复：新增 `IngestRecoveryService`，启动全量 + 周期扫描非终态任务，带 Redis 文档锁检查后重置为 PENDING 并重新驱动；`INDEXED/FAILED` 不动。
-- [ ] Embedding 缓存只管查询向量：`QueryEmbeddingCache` 的 key 版本化只覆盖"查询向量"；正文切片向量是入库时直接算好写进 pgvector，模型升级必须 `reingest` 重算，否则新旧模型混用。当前保持运维侧处理，可评估片段级缓存。
-- [ ] 限流是固定窗口（`INCR+EXPIRE` 的 Lua），非令牌桶；窗口边界突发流量可能被允许/拒绝，如需平滑可评估令牌桶。
+- [x] Embedding 片段级缓存：`QueryEmbeddingCache` 新增 `getOrComputeBatch`，入库阶段把正文切片向量同样纳入 L1(Caffeine)+L2(Redis) 缓存，key 含 provider/model/modelVersion/dimension + 文本摘要。重复入库时相同文本切片复用已算好的向量，只对未命中部分调用一次批量 Embedding，节省重复 embedding 成本。边界：切片向量最终仍写入 pgvector，模型升级后仍需 `reingest` 重建，缓存只让该过程更省、更一致，不改变"模型变更需重建向量"这一事实。
+- [x] API 限流改为惰性令牌桶：`ApiRateLimitFilter` 用 Lua 将"读桶状态 + 补令牌 + 消耗令牌"原子完成，`limit` 作为桶容量、`limit/windowSeconds` 作为每秒补充速率，平滑速率并将窗口边界的突发毛刺收敛为受控突发。登录失败锁定仍保留固定窗口计数（防爆破按窗口计数语义更合适）。
 - [ ] 多租户当前仅"知识库 owner 级"隔离：靠 `knowledge_base.owner_user_id` + 各入口 `requireOwned` + 检索 SQL 的 `kb_id` 过滤，属应用层约定，DB 层无 RLS/冗余 tenant 强隔离；需产品/架构决策后再实施。
 
 ## 五、后续升级选型顺序

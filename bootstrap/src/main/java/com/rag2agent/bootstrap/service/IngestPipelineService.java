@@ -8,7 +8,6 @@ import com.rag2agent.bootstrap.mapper.DocumentMetaMapper;
 import com.rag2agent.bootstrap.storage.MinioStorageService;
 import com.rag2agent.infra.ai.client.EmbeddingClient;
 import com.rag2agent.infra.ai.model.EmbeddingRequest;
-import com.rag2agent.infra.ai.model.EmbeddingResponse;
 import com.rag2agent.rag.core.document.DocumentSource;
 import com.rag2agent.rag.core.document.ParsedDocument;
 import com.rag2agent.rag.core.document.impl.PdfBoxDocumentParser;
@@ -71,6 +70,7 @@ public class IngestPipelineService {
     private final MinioStorageService storage;
     private final EmbeddingClient embeddingClient;
     private final IngestTaskService ingestTaskService;
+    private final QueryEmbeddingCache queryEmbeddingCache;
     private final TransactionTemplate transactionTemplate;
     private final StringRedisTemplate redis;
     private final MeterRegistry meterRegistry;
@@ -82,9 +82,11 @@ public class IngestPipelineService {
             EmbeddingClient embeddingClient,
             IngestTaskService ingestTaskService,
             PlatformTransactionManager transactionManager,
-            StringRedisTemplate redis) {
+            StringRedisTemplate redis,
+            QueryEmbeddingCache queryEmbeddingCache) {
         this(documentMapper, chunkMapper, storage, embeddingClient, ingestTaskService,
-                transactionManager, redis, io.micrometer.core.instrument.Metrics.globalRegistry);
+                transactionManager, redis, io.micrometer.core.instrument.Metrics.globalRegistry,
+                queryEmbeddingCache);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -96,12 +98,14 @@ public class IngestPipelineService {
             IngestTaskService ingestTaskService,
             PlatformTransactionManager transactionManager,
             StringRedisTemplate redis,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            QueryEmbeddingCache queryEmbeddingCache) {
         this.documentMapper = documentMapper;
         this.chunkMapper = chunkMapper;
         this.storage = storage;
         this.embeddingClient = embeddingClient;
         this.ingestTaskService = ingestTaskService;
+        this.queryEmbeddingCache = queryEmbeddingCache;
         // 编程式事务：版本切换需要"更新文档版本 + 删除旧 chunk"原子完成，@Transactional 不适合跨方法编排，
         // 用 TransactionTemplate 在方法内部精确控制事务边界。
         this.transactionTemplate = new TransactionTemplate(transactionManager);
@@ -248,22 +252,20 @@ public class IngestPipelineService {
 
     private void persistChunks(DocumentMeta document, List<TextChunk> chunks, int version) {
         // 分批向量化：Embedding API 有请求体大小限制，每批 16 条，平衡调用次数与单次耗时；
-        // 返回向量与输入文本按下标一一对应，逐条写入 document_chunk（带版本号）
+        // 走 QueryEmbeddingCache 的片段级缓存，相同文本切片在重复入库时可复用向量，省掉重复 embedding 调用；
+        // 缓存 key 含 modelVersion/dimension，模型升级后旧 key 不命中，自然触发重算，不会新旧模型混用。
         int start = 0;
         while (start < chunks.size()) {
             int end = Math.min(start + EMBEDDING_BATCH_SIZE, chunks.size());
             List<String> batchTexts = chunks.subList(start, end).stream()
                     .map(TextChunk::content)
                     .toList();
-            EmbeddingResponse response = embeddingClient.embed(new EmbeddingRequest(
-                    embeddingClient.providerName(), null, batchTexts));
-            // 防御：API 少返回向量时按输入数量写会导致后半段 chunk 静默漏写，这里先校验数量一致
-            if (response.vectors().size() != batchTexts.size()) {
-                throw new IllegalStateException("Embedding 返回数量不匹配: 期望 " + batchTexts.size()
-                        + " 条，实际 " + response.vectors().size() + " 条");
-            }
-            List<DocumentChunkMapper.ChunkRow> rows = new java.util.ArrayList<>(response.vectors().size());
-            for (int i = 0; i < response.vectors().size(); i++) {
+            List<List<Float>> vectors = queryEmbeddingCache.getOrComputeBatch(
+                    embeddingClient.providerName(), embeddingClient.modelName(), batchTexts,
+                    texts -> embeddingClient.embed(new EmbeddingRequest(
+                            embeddingClient.providerName(), null, texts)).vectors());
+            List<DocumentChunkMapper.ChunkRow> rows = new java.util.ArrayList<>(vectors.size());
+            for (int i = 0; i < vectors.size(); i++) {
                 TextChunk chunk = chunks.get(start + i);
                 rows.add(new DocumentChunkMapper.ChunkRow(
                         document.getId(),
@@ -271,7 +273,7 @@ public class IngestPipelineService {
                         chunk.position(),
                         chunk.content(),
                         chunk.content().length(),
-                        toVectorString(response.vectors().get(i)),
+                        toVectorString(vectors.get(i)),
                         null,
                         "{}",
                         version));

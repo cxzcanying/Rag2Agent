@@ -86,6 +86,83 @@ class QueryEmbeddingCacheTest {
         assertEquals(3, calls.get());
     }
 
+    @Test
+    void batchMissesShareOneLoaderCall() {
+        EmbeddingCacheProperties properties = new EmbeddingCacheProperties();
+        properties.setEnabled(true);
+        QueryEmbeddingCache cache = new QueryEmbeddingCache(
+                null, new ObjectMapper(), properties, new SimpleMeterRegistry());
+        AtomicInteger calls = new AtomicInteger();
+        List<String> texts = List.of("a", "b", "c");
+
+        List<List<Float>> result = cache.getOrComputeBatch("provider", "model", texts, missing -> {
+            calls.incrementAndGet();
+            assertEquals(texts, missing);
+            return List.of(List.of(1.0f), List.of(2.0f), List.of(3.0f));
+        });
+
+        assertEquals(1, calls.get());
+        assertEquals(List.of(1.0f), result.get(0));
+        assertEquals(List.of(2.0f), result.get(1));
+        assertEquals(List.of(3.0f), result.get(2));
+    }
+
+    @Test
+    void batchReusesCachedTextAndOnlyComputesMissing() {
+        EmbeddingCacheProperties properties = new EmbeddingCacheProperties();
+        properties.setEnabled(true);
+        QueryEmbeddingCache cache = new QueryEmbeddingCache(
+                null, new ObjectMapper(), properties, new SimpleMeterRegistry());
+        cache.getOrComputeBatch("provider", "model", List.of("a", "b", "c"),
+                missing -> List.of(List.of(1.0f), List.of(2.0f), List.of(3.0f)));
+        AtomicInteger calls = new AtomicInteger();
+
+        List<List<Float>> result = cache.getOrComputeBatch("provider", "model", List.of("a", "x", "c"),
+                missing -> {
+                    calls.incrementAndGet();
+                    assertEquals(List.of("x"), missing);
+                    return List.of(List.of(9.0f));
+                });
+
+        assertEquals(1, calls.get());
+        assertEquals(List.of(1.0f), result.get(0));
+        assertEquals(List.of(9.0f), result.get(1));
+        assertEquals(List.of(3.0f), result.get(2));
+    }
+
+    @Test
+    void batchModelVersionIsolatesEntries() {
+        EmbeddingCacheProperties properties = new EmbeddingCacheProperties();
+        properties.setEnabled(true);
+        QueryEmbeddingCache cache = new QueryEmbeddingCache(
+                null, new ObjectMapper(), properties, new SimpleMeterRegistry());
+        AtomicInteger calls = new AtomicInteger();
+        cache.getOrComputeBatch("provider", "model", List.of("q"), missing -> {
+            calls.incrementAndGet();
+            return List.of(List.of(1.0f));
+        });
+        properties.setModelVersion("v2");
+        cache.getOrComputeBatch("provider", "model", List.of("q"), missing -> {
+            calls.incrementAndGet();
+            return List.of(List.of(2.0f));
+        });
+        assertEquals(2, calls.get());
+    }
+
+    @Test
+    void batchDisabledBypassesCache() {
+        EmbeddingCacheProperties properties = new EmbeddingCacheProperties();
+        properties.setEnabled(false);
+        QueryEmbeddingCache cache = new QueryEmbeddingCache(
+                null, new ObjectMapper(), properties, new SimpleMeterRegistry());
+        AtomicInteger calls = new AtomicInteger();
+        cache.getOrComputeBatch("provider", "model", List.of("a", "b"), missing -> {
+            calls.incrementAndGet();
+            return List.of(List.of(1.0f), List.of(2.0f));
+        });
+        assertEquals(1, calls.get());
+    }
+
     private static void await(CountDownLatch latch) {
         try {
             latch.await(2, TimeUnit.SECONDS);
