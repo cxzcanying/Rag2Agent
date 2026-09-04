@@ -35,3 +35,6 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Agent / coding-CLI 说明文档不入库
+/AGENTS.md
