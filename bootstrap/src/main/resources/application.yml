@@ -6,6 +6,10 @@ spring:
     name: rag2agent
   profiles:
     active: dev
+  task:
+    scheduling:
+      pool:
+        size: 2
   servlet:
     multipart:
       max-file-size: 50MB
@@ -62,6 +66,10 @@ sa-token:
   is-log: false
 
 rag2agent:
+  recovery:
+    enabled: ${RAG2AGENT_RECOVERY_ENABLED:true}
+    scan-interval-ms: ${RAG2AGENT_RECOVERY_SCAN_INTERVAL_MS:60000}
+    ingest-stale-seconds: ${RAG2AGENT_RECOVERY_INGEST_STALE_SECONDS:1800}
   ingest:
     rocketmq-enabled: ${RAG2AGENT_MQ_ENABLED:false}
   search:
@@ -87,6 +95,8 @@ rag2agent:
     summary-max-chars: ${RAG2AGENT_SUMMARY_MAX_CHARS:1200}
     max-output-tokens: ${RAG2AGENT_MAX_OUTPUT_TOKENS:1024}
     tool-timeout-millis: ${RAG2AGENT_TOOL_TIMEOUT_MILLIS:10000}
+    max-tool-calls: ${RAG2AGENT_MAX_TOOL_CALLS:20}
+    approval-timeout-seconds: ${RAG2AGENT_APPROVAL_TIMEOUT_SECONDS:1800}
   application:
     name: RAG2Agent
     version: 0.1.0-SNAPSHOT

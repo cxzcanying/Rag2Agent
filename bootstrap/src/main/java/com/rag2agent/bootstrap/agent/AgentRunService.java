@@ -384,6 +384,8 @@ public class AgentRunService {
             int maxIterations, Consumer<AgentEvent> onEvent) {
         updateStatus(runId, "EXECUTING");
 
+        // 全局工具调用计数：防止单轮多个工具或跨轮反复调用同一工具把资源耗光。
+        int totalToolCalls = 0;
         for (int iteration = 0; iteration < maxIterations; iteration++) {
             int estimatedTokens = contextCompactor.estimateTokens(messages);
             if (estimatedTokens > agentProperties.getContextTokenBudget()) {
@@ -468,6 +470,11 @@ public class AgentRunService {
                                 runId, "WAITING_APPROVAL", null, references, pending.getId());
                     }
 
+                    // 达到全局工具上限：停止本轮并强制总结，避免副作用次数不受控。
+                    if (totalToolCalls >= agentProperties.getMaxToolCalls()) {
+                        return finalizeAtMaxSteps(runId, messages, references, maxIterations, onEvent);
+                    }
+
                     onEvent.accept(new AgentEvent("tool_start", Map.of(
                             "name", toolCall.name(), "arguments", toolCall.arguments())));
                     String output;
@@ -479,6 +486,7 @@ public class AgentRunService {
                     }
                     messages.add(ChatMessage.assistantWithToolCalls(List.of(toolCall)));
                     messages.add(ChatMessage.tool(toolCall.id(), toolCall.name(), output));
+                    totalToolCalls++;
                 }
             } else {
                 String answer = response.content() == null ? "" : response.content();

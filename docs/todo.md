@@ -230,6 +230,17 @@
 - [ ] 评测数据飞轮：确定 Prompt/config 版本、人工批准、反馈脱敏和回滚流程。
 - [ ] Agent 规划/反思/长期记忆：先确认是否纳入产品范围，再设计状态、权限和预算边界。
 
+### 4.4 代码层面已确认的边界（面试评审提炼，已定位到实现）
+
+以下为通读代码时确认的真实缺口，不是"预留重构"。前 3 项本次已修复并通过 `mvn -pl bootstrap -am test` 定向验证；其余为架构/运维口径，不改语义。
+
+- [x] Agent 审批超时自动终态化：`agent_run` 会一直停在 `WAITING_APPROVAL`，唯一兜底是 Redis 上下文 30 分钟 TTL；到期后点"通过"会因上下文过期而失败，但 run / `tool_call` 不自动置终态，容易积压无人处理。本次修复：新增 `AgentApprovalTimeoutScanner`（每 60s 扫描、默认超时 30 分钟），把超时 run 置为 `FAILED`、挂起的 `tool_call` 置为 `TIMED_OUT`。
+- [x] Agent 工具调用全局硬上限：`executeLoop` 只按 LLM 轮数 `max_iterations`(10) 封顶，单轮可执行多个 toolCall、跨轮可反复调同一工具，副作用次数不受控。本次修复：新增 `rag2agent.agent.max-tool-calls`（默认 20），达到即走 `finalizeAtMaxSteps` 强制总结。
+- [x] 异步入库中断任务恢复：应用在"任务已落库、消息未发送"或"处理中途崩溃"时，任务停在 `PENDING/PARSING/SPLITTING/EMBEDDING` 且无自动补跑；仅靠 MQ 重试 + 手动 `reingest`。本次修复：新增 `IngestRecoveryService`，启动全量 + 周期扫描非终态任务，带 Redis 文档锁检查后重置为 PENDING 并重新驱动；`INDEXED/FAILED` 不动。
+- [ ] Embedding 缓存只管查询向量：`QueryEmbeddingCache` 的 key 版本化只覆盖"查询向量"；正文切片向量是入库时直接算好写进 pgvector，模型升级必须 `reingest` 重算，否则新旧模型混用。当前保持运维侧处理，可评估片段级缓存。
+- [ ] 限流是固定窗口（`INCR+EXPIRE` 的 Lua），非令牌桶；窗口边界突发流量可能被允许/拒绝，如需平滑可评估令牌桶。
+- [ ] 多租户当前仅"知识库 owner 级"隔离：靠 `knowledge_base.owner_user_id` + 各入口 `requireOwned` + 检索 SQL 的 `kb_id` 过滤，属应用层约定，DB 层无 RLS/冗余 tenant 强隔离；需产品/架构决策后再实施。
+
 ## 五、后续升级选型顺序
 
 1. 真实环境验证 `A1-R` 的断线恢复和 RocketMQ/Jaeger 父子链路。

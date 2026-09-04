@@ -219,6 +219,11 @@ class ToolExecutorTest {
         }
 
         @Override
+        public int timeoutPendingApproval(Long runId, String message) {
+            return 1;
+        }
+
+        @Override
         public List<ToolCallRecord> listByRunId(Long runId) {
             return record == null ? List.of() : List.of(record);
         }

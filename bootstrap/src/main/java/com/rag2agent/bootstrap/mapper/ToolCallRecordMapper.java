@@ -37,6 +37,11 @@ public interface ToolCallRecordMapper {
             + "WHERE id = #{id} AND run_id = #{runId} AND status = 'WAITING_APPROVAL'")
     int claimApproval(@Param("id") Long id, @Param("runId") Long runId);
 
+    /** 审批超时：把某次执行下所有仍处 WAITING_APPROVAL 的工具调用置为 TIMED_OUT。 */
+    @Update("UPDATE tool_call SET status = 'TIMED_OUT', error_message = #{message}, updated_at = now() "
+            + "WHERE run_id = #{runId} AND status = 'WAITING_APPROVAL'")
+    int timeoutPendingApproval(@Param("runId") Long runId, @Param("message") String message);
+
     @Select("SELECT * FROM tool_call WHERE run_id = #{runId} ORDER BY id")
     List<ToolCallRecord> listByRunId(Long runId);
 }

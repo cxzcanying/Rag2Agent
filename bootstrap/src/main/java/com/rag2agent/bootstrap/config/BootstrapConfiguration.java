@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
     RetrievalProperties.class,
     TokenCostProperties.class
     , McpRemoteProperties.class
+    , RecoveryProperties.class
 })
 public class BootstrapConfiguration {
 

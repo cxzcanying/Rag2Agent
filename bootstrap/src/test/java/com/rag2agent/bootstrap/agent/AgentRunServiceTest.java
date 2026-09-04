@@ -3,6 +3,7 @@ package com.rag2agent.bootstrap.agent;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -15,12 +16,17 @@ import com.rag2agent.bootstrap.entity.AgentStep;
 import com.rag2agent.bootstrap.mapper.AgentRunMapper;
 import com.rag2agent.bootstrap.mapper.AgentStepMapper;
 import com.rag2agent.bootstrap.mapper.ToolCallRecordMapper;
+import com.rag2agent.bootstrap.tool.ToolExecutor;
+import com.rag2agent.bootstrap.tool.ToolRegistry;
 import com.rag2agent.bootstrap.entity.AgentRun;
 import com.rag2agent.infra.ai.client.ChatModelClient;
 import com.rag2agent.infra.ai.exception.AiClientException;
 import com.rag2agent.infra.ai.model.ChatCompletionRequest;
 import com.rag2agent.infra.ai.model.ChatCompletionResponse;
 import com.rag2agent.infra.ai.model.ChatMessage;
+import com.rag2agent.infra.ai.model.ToolCall;
+import com.rag2agent.infra.ai.model.ToolDef;
+import com.rag2agent.rag.core.retrieval.RetrievalResult;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
@@ -131,6 +137,54 @@ class AgentRunServiceTest {
         assertEquals("FAILED", result.status());
         assertEquals("error", events.getLast().type());
         assertEquals("模型服务响应超时，请稍后重试", events.getLast().data());
+    }
+
+    @Test
+    void toolCallGlobalCapForcesFinalSummaryWithoutExceedingBudget() {
+        // 模型在工具调用阶段持续返回工具；总结阶段（无工具）返回内容。
+        ChatModelClient chatClient = chatClient(request -> {
+            if (request.tools() == null || request.tools().isEmpty()) {
+                return new ChatCompletionResponse("已达上限的总结", "stop", Map.of());
+            }
+            return new ChatCompletionResponse(
+                    null, "tool_calls", Map.of(),
+                    List.of(new ToolCall("tc-1", "function", "search_kb", "{}")));
+        });
+        AgentProperties props = new AgentProperties();
+        props.setMaxToolCalls(2);
+
+        com.rag2agent.bootstrap.service.HybridSearchService search =
+                mock(com.rag2agent.bootstrap.service.HybridSearchService.class);
+        when(search.search(eq(3L), anyString(), eq(5))).thenReturn(List.of(
+                new RetrievalResult("c1", "资料", 0.9, Map.of("documentId", 1, "chunkIndex", 0))));
+        ToolRegistry tools = mock(ToolRegistry.class);
+        when(tools.requiresApproval(anyString())).thenReturn(false);
+        when(tools.toolDefs()).thenReturn(List.of(new ToolDef("search_kb", "d", Map.of())));
+        ToolExecutor executor = mock(ToolExecutor.class);
+        when(executor.execute(any(), any(), anyString(), any())).thenReturn("ok");
+        AgentRunMapper runs = mock(AgentRunMapper.class);
+        when(runs.selectByClientRequest(1L, "cap-1")).thenReturn(null);
+        when(runs.insert(any(AgentRun.class))).thenAnswer(invocation -> {
+            ((AgentRun) invocation.getArgument(0)).setId(99L);
+            return 1;
+        });
+        AgentStepMapper steps = mock(AgentStepMapper.class);
+        ToolCallRecordMapper calls = mock(ToolCallRecordMapper.class);
+        StringRedisTemplate redis = redisWithReferences();
+        com.rag2agent.bootstrap.service.KnowledgeBaseService kb =
+                mock(com.rag2agent.bootstrap.service.KnowledgeBaseService.class);
+
+        AgentRunService service = new AgentRunService(
+                chatClient, search, tools, executor, runs, steps, calls,
+                new ObjectMapper(), redis, new SimpleMeterRegistry(),
+                ObservationRegistry.create(), props, kb);
+
+        List<AgentEvent> events = new ArrayList<>();
+        AgentExecutionResult result = service.start(1L, "session", "cap-1", "问题", 3L, events::add);
+
+        assertEquals("MAX_STEPS_REACHED", result.status());
+        org.mockito.Mockito.verify(executor, org.mockito.Mockito.times(2))
+                .execute(any(Long.class), any(Long.class), anyString(), any());
     }
 
     private static AgentRunService service(ChatModelClient chatClient) {
