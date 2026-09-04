@@ -31,11 +31,11 @@
 | 领域 | 已实现 |
 | --- | --- |
 | 账号与权限 | 注册、登录、Sa-Token 会话；知识库 owner 校验覆盖文档、检索、Agent 工具、评测和审批入口 |
-| 文档入库 | PDF 上传到 MinIO；RocketMQ 异步处理；PDF 解析、递归切块、Embedding、当前版本 chunk 写入 PostgreSQL/pgvector |
+| 文档入库 | PDF 上传到 MinIO；RocketMQ 异步处理；PDF 解析、递归切块、Embedding（批量 + 片段级缓存复用未变切片）、当前版本 chunk 写入 PostgreSQL/pgvector；启动/周期扫描自动恢复非终态中断任务 |
 | 检索 | Query Routing；向量检索与 `pg_trgm` 关键词检索并行；RRF 融合；可选 Rerank；返回引用来源 |
-| Agent | OpenAI-compatible function calling；工具 schema/权限/审计/超时；写操作审批；SSE 对话；上下文压缩和最大步数后的无工具总结 |
-| AI 可靠性 | 超时、重试、熔断、降级、并发舱壁；Redis Lua 用户限流；失败响应统一脱敏 |
-| 缓存 | Caffeine L1 + Redis L2 Embedding 查询缓存和 single-flight；内容寻址 key 可复用未改变文本的结果 |
+| Agent | OpenAI-compatible function calling；工具 schema/权限/审计/超时；写操作审批；SSE 对话；上下文压缩；最大步数（10）与全局工具调用数（默认 20）双层封顶后的强制总结 |
+| AI 可靠性 | 超时、重试、熔断、降级、并发舱壁；Redis Lua 令牌桶用户限流；失败响应统一脱敏 |
+| 缓存 | 查询向量与正文切片共用 Caffeine L1 + Redis L2 片段级缓存（批量 `getOrComputeBatch`），single-flight + 内容寻址 key（含 provider/model/维度/模型版本）复用未变切片，未命中才批量回源 |
 | 可观测性 | Micrometer 指标、Prometheus、OpenTelemetry OTLP、Jaeger、JSON 日志；HTTP/检索/LLM/工具/MQ trace context 基础链路 |
 | 评测 | 用例导入、单配置/矩阵提交；异步 run、进度查询、逐题结果、取消、失败/超时、重启恢复和 `Idempotency-Key` 幂等 |
 | 前端 | Vue 3 + Vite；登录、知识库/文档、对话审批、评测进度和取消页面 |
@@ -46,13 +46,13 @@ RAG2Agent 的定位不是「能检索、能对话」的单点 Demo，而是把�
 
 | 维度 | 本项目（RAG2Agent） | 通用框架 / 快速 Demo 的常见取舍 |
 | --- | --- | --- |
-| 可靠性 | 请求级幂等（`clientRequestId` 唯一约束）+ 会话锁租约续期、Redis Lua 限流、超时/重试/熔断/降级、并发舱壁、失败响应统一脱敏 | 通常依赖中间件或插件编排，幂等、限流、熔断与恢复边界往往要自己补齐 |
+| 可靠性 | 请求级幂等（`clientRequestId` 唯一约束）+ 会话锁租约续期、Redis Lua 令牌桶限流、超时/重试/熔断/降级、并发舱壁、失败响应统一脱敏、审批超时自动终态化 | 通常依赖中间件或插件编排，幂等、限流、熔断与恢复边界往往要自己补齐 |
 | 可观测性 | Micrometer + Prometheus + OpenTelemetry/Jaeger，HTTP → 检索 → LLM → 工具 → MQ 全链路 trace context，JSON 结构化日志，业务指标命名与 `outcome` 约定 | 常见只有调用日志或 HTTP 监控，链路追踪、业务指标与日志串联多是后续拼装 |
-| 任务恢复 | 异步入库与评测断点续跑、应用重启从 `eval_run` 恢复、RocketMQ DLQ 死信读取回投、评测任务幂等 | 任务状态常放内存或依赖线程，重启/超时/重复消费的恢复边界不清晰 |
+| 任务恢复 | 异步入库与评测断点续跑、启动/周期扫描自动恢复非终态入库任务（`IngestRecoveryService`）、应用重启从 `eval_run` 恢复、RocketMQ DLQ 死信读取回投、评测任务幂等 | 任务状态常放内存或依赖线程，重启/超时/重复消费的恢复边界不清晰 |
 | 检索与评测 | 向量 + `pg_trgm` 关键词双路 + RRF 融合 + 可选重排，内置用例导入/单配置/矩阵评测（Hit@k、MRR、Faithfulness）、可复现实验入口 | 检索通常只给链路，评测数据、指标与调参闭环要单独搭建 |
 | 中文检索 | `zhparser` 中文分词 + 二元切分回退，用固定 MIRACL zh 子集做 A/B，关键词 Hit@5 有可量化提升 | 通用检索对中文关键词召回普遍偏弱，且常无本地评测佐证 |
-| 成本治理 | AI usage 账本（`ai_usage_ledger`），价格版本/币种/分时与缓存 token 单价，Token 估算偏差校准 | 常见缺少可对账的成本数据，额度与开销难以回溯 |
-| Agent 安全 | 工具 schema/权限/审计/超时、写操作人工审批、无引用不答、提示注入规则信号、最大步数降级 | 工具调用常见「能用」即止，审批、审计、注入防护边界要自行设计 |
+| 成本治理 | AI usage 账本（`ai_usage_ledger`），价格版本/币种/分时与缓存 token 单价，Token 估算偏差校准；片段级 Embedding 缓存复用未变切片，降低重复向量化成本 | 常见缺少可对账的成本数据，额度与开销难以回溯 |
+| Agent 安全 | 工具 schema/权限/审计/超时、写操作人工审批、无引用不答、提示注入规则信号、最大步数（10）与全局工具调用数（默认 20）双层封顶、审批超时自动终态化 | 工具调用常见「能用」即止，审批、审计、注入防护边界要自行设计 |
 | 排查闭环 | 前端聊天消息携带 traceId（诊断 ID），错误日志可按 traceId 检索 | 前端与排查链路常割裂，出问题时难以定位到具体请求 |
 
 这些能力可以在本地 `docker compose --profile full up -d` + 真实模型上复现，验收证据见 [docs/v2-validation-report.md](docs/v2-validation-report.md)。它仍是工程样例而非生产成品：多租户 ACL、GraphRAG、配置中心、财务审计、自动调参数据飞轮等仍属路线图（见[边界与路线图](#边界与路线图)）。
@@ -192,7 +192,9 @@ RAG2AGENT_RATE_LIMIT=60
 
 `RAG2AGENT_MQ_ENABLED`、`RAG2AGENT_CHINESE_SEARCH_MODE`、`RAG2AGENT_EMBEDDING_*`、`RAG2AGENT_RATE_LIMIT_*`、`RAG2AGENT_AI_RESILIENCE_*`、`RAG2AGENT_MCP_REMOTE_*` 等均可在 `.env` 或环境变量中覆盖，默认值见 `bootstrap/src/main/resources/application.yml`。价格相关变量以 `DEEPSEEK_*_PRICE_*` / `SILICONFLOW_*_PRICE_*` 前缀为主，默认使用官方分时 / 免费用量口径。
 
-Embedding 缓存 key 使用 provider、model、维度和文本 hash 做内容寻址，不包含文档版本号，因此同一文本可跨文档版本复用；模型版本变更时应调整 model 配置或清理对应缓存空间，不能把旧模型结果当作新模型结果。
+接口限流为惰性令牌桶：`RAG2AGENT_RATE_LIMIT` 作为桶容量，`RAG2AGENT_RATE_LIMIT_WINDOW_SECONDS` 作为补充窗口，实际每秒补速率 = 容量 / 窗口秒（默认 60 / 60 = 1 个/秒，允许受控突发）；登录失败锁定仍为固定窗口计数。
+
+Embedding 缓存 key 使用 provider、model、维度、模型版本和文本 hash 做内容寻址，查询向量与正文切片（片段级）共用同一套缓存，不包含文档版本号，因此同一文本可跨文档版本复用；重复入库时未变的切片直接复用，未命中的才回源批量计算。模型版本变更时应调整 model 配置或提升 `RAG2AGENT_EMBEDDING_MODEL_VERSION` 使新旧 key 隔离，并注意存量切片的库内向量仍需 `reingest` 重建，不能把旧模型结果当作新模型结果。
 
 ## API 概览
 
@@ -339,12 +341,13 @@ RAG2Agent/
 
 ## 边界与路线图
 
-以下内容已记录在 [docs/todo.md](docs/todo.md)，README 不把它们当作已交付能力：
+以下为当前已落地能力及其剩余边界，完整路线与待办见 [docs/todo.md](docs/todo.md)：
 
 - 已接入 provider usage 与估算 token 校准指标、AI usage 账本（含缓存 token/价格版本字段）和中文检索：DeepSeek 默认使用官方 USD 分时价格，SiliconFlow BGE 模型按官方免费价记录，仍可由环境变量覆盖；默认无扩展时使用二元切分，启用 `rag2agent-postgres:pg17-zhparser` 后使用 `zhparser`；固定 MIRACL zh 子集验证了关键词和混合检索收益。完整验收证据见 [V2 集成验收记录](docs/v2-validation-report.md)。
 - SSE 已支持 Redis Stream + `Last-Event-ID` 增量回放；超出保留窗口时回退到 run 状态查询，多行事件/半包兼容性和生产级长连接治理仍需继续补强。
-- Agent 已有同一 session 的并发锁、最大步数降级和完整工具审计；`clientRequestId` 请求级幂等与长任务锁租约续期已落地。
+- Agent 已有同一 session 的并发锁、最大步数（10）与全局工具调用数（默认 20）双层封顶、审批超时自动终态化、完整工具审计；`clientRequestId` 请求级幂等与长任务锁租约续期已落地。
 - 现有 ACL 是 owner-only，不是带共享、协作组、只读/可写/管理员角色的多租户模型；输入防御、资源配额和队列积压治理也仍在 TODO。
+- Embedding 片段级缓存复用未变切片以降低重复向量化成本，但切片向量最终仍写入 pgvector；模型升级后仍需对存量文档 `reingest` 重建，缓存只让重算更省、更一致，不改变“模型变更需重建库内向量”这一事实。
 - Neo4j 仅随 Compose 启动并保留端口，尚无实体抽取、Cypher 查询或 GraphRAG 检索链路；当前检索基线是向量 + 关键词。
 - 没有 SQLite 替代方案或 GraalVM 单文件发行物。当前 SQL 依赖 PostgreSQL 的 pgvector、JSONB、数组和全文能力，完整 Compose 是本地演示前提。
 - 评测结果目前用于人工比较切块/路由/重排配置，尚无自动调参、线上点赞/点踩反馈回流、Bad Case 自动入集的数据飞轮。
