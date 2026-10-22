@@ -487,6 +487,7 @@ Neo4j 关系：
 - 推理档位已写入 LLM 耗时指标标签和 Agent 步骤输出；默认 `off`，保持现有供应商兼容性。
 - 已新增 `agent_session`、`agent_event` 和 `agent_checkpoint` 表，现有 SSE 事件同步写入不可变事件日志。
 - Agent 结束或失败时写入终端检查点；Redis Stream 继续只承担实时投递。
+- 已提供按用户和会话读取持久事件的分页 API，Redis Stream 过期后仍可从 PostgreSQL 回放轨迹。
 - 待完成模型能力协商、推理摘要/Tokens 解析、预算降级和档位 A/B 评测。
 - 待完成事件回放恢复、任务图、暂停/转向和检查点时间旅行。
 

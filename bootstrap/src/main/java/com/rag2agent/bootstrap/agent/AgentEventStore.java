@@ -2,6 +2,7 @@ package com.rag2agent.bootstrap.agent;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.List;
 import java.util.Map;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -55,6 +56,24 @@ public class AgentEventStore {
                 """, runId, sessionId, eventSeq, json(state));
     }
 
+    public List<EventRecord> listEvents(
+            Long userId, String sessionId, long afterSeq, int limit) {
+        return jdbc.query("""
+                SELECT id, run_id, seq, event_type, CAST(payload AS text) AS payload, created_at
+                FROM agent_event
+                WHERE user_id = ? AND session_id = ? AND seq > ?
+                ORDER BY seq
+                LIMIT ?
+                """, (rs, rowNum) -> new EventRecord(
+                        rs.getLong("id"),
+                        rs.getLong("run_id"),
+                        rs.getLong("seq"),
+                        rs.getString("event_type"),
+                        rs.getString("payload"),
+                        rs.getTimestamp("created_at").toInstant()),
+                userId, sessionId, afterSeq, limit);
+    }
+
     private String json(Object value) {
         try {
             return objectMapper.writeValueAsString(value == null ? Map.of() : value);
@@ -62,4 +81,12 @@ public class AgentEventStore {
             throw new IllegalArgumentException("Agent 事件序列化失败", exception);
         }
     }
+
+    public record EventRecord(
+            long id,
+            long runId,
+            long seq,
+            String type,
+            String payload,
+            java.time.Instant createdAt) {}
 }

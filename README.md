@@ -221,6 +221,7 @@ GET  /api/search?kbId={kbId}&query={query}&topK={topK}
 
 POST /api/chat                         # SSE
 POST /api/agent/approvals/{runId}
+GET  /api/agent/sessions/{sessionId}/events?afterSeq={seq}&limit={limit}
 
 POST /api/evaluations/cases/import
 POST /api/evaluations/runs

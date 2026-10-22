@@ -4,9 +4,11 @@ import cn.dev33.satoken.stp.StpUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.agent.AgentEvent;
 import com.rag2agent.bootstrap.agent.AgentExecutionResult;
+import com.rag2agent.bootstrap.agent.AgentEventStore;
 import com.rag2agent.bootstrap.agent.AgentRunService;
 import com.rag2agent.bootstrap.dto.AgentDtos.ApprovalRequest;
 import com.rag2agent.bootstrap.dto.AgentDtos.ChatRequest;
+import com.rag2agent.bootstrap.dto.AgentDtos.PersistedAgentEvent;
 import com.rag2agent.framework.common.ApiResponse;
 import com.rag2agent.infra.ai.exception.AiClientException;
 import jakarta.validation.Valid;
@@ -27,6 +29,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -41,13 +44,15 @@ public class AgentController {
     private final ObjectMapper objectMapper;
     private final Tracer tracer;
     private final AgentEventReplayStore eventStore;
+    private final AgentEventStore durableEventStore;
 
     public AgentController(AgentRunService agentRunService, ObjectMapper objectMapper, Tracer tracer,
-            AgentEventReplayStore eventStore) {
+            AgentEventReplayStore eventStore, AgentEventStore durableEventStore) {
         this.agentRunService = agentRunService;
         this.objectMapper = objectMapper;
         this.tracer = tracer;
         this.eventStore = eventStore;
+        this.durableEventStore = durableEventStore;
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -156,6 +161,32 @@ public class AgentController {
     @GetMapping("/agent/runs/{runId}")
     public ApiResponse<AgentExecutionResult> getRun(@PathVariable Long runId) {
         return ApiResponse.success(agentRunService.getRun(StpUtil.getLoginIdAsLong(), runId));
+    }
+
+    @GetMapping("/agent/sessions/{sessionId}/events")
+    public ApiResponse<java.util.List<PersistedAgentEvent>> persistedEvents(
+            @PathVariable String sessionId,
+            @RequestParam(defaultValue = "0") long afterSeq,
+            @RequestParam(defaultValue = "100") int limit) {
+        if (sessionId == null || sessionId.isBlank() || sessionId.length() > 64) {
+            throw new com.rag2agent.framework.exception.BusinessException(
+                    com.rag2agent.framework.common.ErrorCode.BAD_REQUEST, "sessionId 无效");
+        }
+        if (afterSeq < 0 || limit < 1 || limit > 200) {
+            throw new com.rag2agent.framework.exception.BusinessException(
+                    com.rag2agent.framework.common.ErrorCode.BAD_REQUEST,
+                    "afterSeq 不能为负，limit 必须在 1~200 之间");
+        }
+        var events = durableEventStore.listEvents(
+                StpUtil.getLoginIdAsLong(), sessionId, afterSeq, limit);
+        return ApiResponse.success(events.stream().map(event -> {
+            try {
+                return PersistedAgentEvent.from(
+                        event, objectMapper.readValue(event.payload(), Object.class));
+            } catch (Exception exception) {
+                throw new IllegalStateException("Agent 事件 JSON 解析失败", exception);
+            }
+        }).toList());
     }
 
     private void sendEvent(PrintWriter writer, AgentEvent event) {
