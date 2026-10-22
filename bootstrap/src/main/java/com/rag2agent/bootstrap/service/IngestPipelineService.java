@@ -1,6 +1,8 @@
 package com.rag2agent.bootstrap.service;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.entity.DocumentMeta;
 import com.rag2agent.bootstrap.entity.IngestTask;
 import com.rag2agent.bootstrap.mapper.DocumentChunkMapper;
@@ -11,6 +13,7 @@ import com.rag2agent.infra.ai.model.EmbeddingRequest;
 import com.rag2agent.rag.core.document.ParsedDocument;
 import com.rag2agent.rag.core.split.TextChunk;
 import com.rag2agent.rag.core.split.impl.RecursiveTextSplitter;
+import com.rag2agent.rag.core.split.impl.TableChunkBuilder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -70,6 +73,7 @@ public class IngestPipelineService {
     private final QueryEmbeddingCache queryEmbeddingCache;
     private final DocumentParseService documentParseService;
     private final DocumentStructureRepository documentStructureRepository;
+    private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
     private final StringRedisTemplate redis;
     private final MeterRegistry meterRegistry;
@@ -84,10 +88,11 @@ public class IngestPipelineService {
             StringRedisTemplate redis,
             QueryEmbeddingCache queryEmbeddingCache,
             DocumentParseService documentParseService,
-            DocumentStructureRepository documentStructureRepository) {
+            DocumentStructureRepository documentStructureRepository,
+            ObjectMapper objectMapper) {
         this(documentMapper, chunkMapper, storage, embeddingClient, ingestTaskService,
                 transactionManager, redis, io.micrometer.core.instrument.Metrics.globalRegistry,
-                queryEmbeddingCache, documentParseService, documentStructureRepository);
+                queryEmbeddingCache, documentParseService, documentStructureRepository, objectMapper);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -102,7 +107,8 @@ public class IngestPipelineService {
             MeterRegistry meterRegistry,
             QueryEmbeddingCache queryEmbeddingCache,
             DocumentParseService documentParseService,
-            DocumentStructureRepository documentStructureRepository) {
+            DocumentStructureRepository documentStructureRepository,
+            ObjectMapper objectMapper) {
         this.documentMapper = documentMapper;
         this.chunkMapper = chunkMapper;
         this.storage = storage;
@@ -116,6 +122,7 @@ public class IngestPipelineService {
         this.meterRegistry = meterRegistry;
         this.documentParseService = documentParseService;
         this.documentStructureRepository = documentStructureRepository;
+        this.objectMapper = objectMapper;
     }
 
     public void process(Long documentId) {
@@ -227,7 +234,8 @@ public class IngestPipelineService {
                 throw new IllegalStateException("文档提取文本为空或过短，请检查 OCR 或原文质量");
             }
             ingestTaskService.markStage(task.getId(), "SPLITTING");
-            List<TextChunk> chunks = new RecursiveTextSplitter().split(parsed);
+            List<TextChunk> chunks = new java.util.ArrayList<>(new RecursiveTextSplitter().split(parsed));
+            chunks.addAll(new TableChunkBuilder().build(structured, chunks.size()));
             log.info("文档 {} 切块完成: {} chunks", documentId, chunks.size());
 
             ingestTaskService.markStage(task.getId(), "EMBEDDING");
@@ -277,6 +285,9 @@ public class IngestPipelineService {
             List<DocumentChunkMapper.ChunkRow> rows = new java.util.ArrayList<>(vectors.size());
             for (int i = 0; i < vectors.size(); i++) {
                 TextChunk chunk = chunks.get(start + i);
+                Integer pageNumber = chunk.metadata().get("pageNumber") instanceof Number number
+                        ? number.intValue()
+                        : null;
                 rows.add(new DocumentChunkMapper.ChunkRow(
                         document.getId(),
                         document.getKbId(),
@@ -284,8 +295,8 @@ public class IngestPipelineService {
                         chunk.content(),
                         chunk.content().length(),
                         toVectorString(vectors.get(i)),
-                        null,
-                        "{}",
+                        pageNumber,
+                        toJson(chunk.metadata()),
                         version));
             }
             chunkMapper.insertChunks(rows);
@@ -313,5 +324,13 @@ public class IngestPipelineService {
         // List<Float> -> "[0.1,0.2,0.3]"，配合 SQL 的 ::vector 转换写入 pgvector；
         // 用 join 而非 toString() 是为了去掉空格，保证 pgvector 输入格式严格兼容
         return vector.stream().map(String::valueOf).collect(Collectors.joining(",", "[", "]"));
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalArgumentException("chunk metadata 序列化失败", exception);
+        }
     }
 }

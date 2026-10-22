@@ -31,7 +31,7 @@
 | 领域 | 已实现 |
 | --- | --- |
 | 账号与权限 | 注册、登录、Sa-Token 会话；知识库 owner 校验覆盖文档、检索、Agent 工具、评测和审批入口 |
-| 文档入库 | 文件上传到 MinIO；RocketMQ 异步处理；默认使用 PDFBox 解析 PDF，启用 Docling 后支持 DOCX、PPTX、XLSX、HTML、图片和邮件，并持久化文档元素、逻辑表格、表格行与资产；递归切块、Embedding（批量 + 片段级缓存）、版本化写入 PostgreSQL/pgvector；启动/周期扫描自动恢复非终态中断任务 |
+| 文档入库 | 文件上传到 MinIO；RocketMQ 异步处理；默认使用 PDFBox 解析 PDF，启用 Docling 后支持 DOCX、PPTX、XLSX、HTML、图片和邮件，并持久化文档元素、逻辑表格、表格行与资产；递归切块和表格行上下文 chunk、Embedding（批量 + 片段级缓存）、版本化写入 PostgreSQL/pgvector；启动/周期扫描自动恢复非终态中断任务 |
 | 检索 | Query Routing；向量检索与 `pg_trgm` 关键词检索并行；RRF 融合；可选 Rerank；返回引用来源 |
 | Agent | OpenAI-compatible function calling；工具 schema/权限/审计/超时；写操作审批；SSE 对话；上下文压缩；最大步数（10）与全局工具调用数（默认 20）双层封顶后的强制总结 |
 | AI 可靠性 | 超时、重试、熔断、降级、并发舱壁；Redis Lua 令牌桶用户限流；失败响应统一脱敏 |
