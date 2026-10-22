@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.CaseInput;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.CaseResult;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.EvaluationConfig;
+import com.rag2agent.bootstrap.dto.EvaluationDtos.GoldSetCoverage;
+import com.rag2agent.bootstrap.dto.EvaluationDtos.GoldSetViolation;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunStatus;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunSubmission;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunSummary;
@@ -99,7 +101,16 @@ public class EvaluationService {
      */
     @Transactional(rollbackFor = Exception.class)
     public int importCases(Long kbId, List<CaseInput> cases) {
+        List<GoldSetViolation> violations = GoldSetRules.validateInputs(cases);
+        if (!violations.isEmpty()) {
+            throw new BusinessException(
+                    ErrorCode.BAD_REQUEST, violations.getFirst().message());
+        }
         return repository.insertCases(kbId, cases);
+    }
+
+    public GoldSetCoverage goldSetCoverage(Long kbId) {
+        return GoldSetRules.coverage(repository.listCases(kbId));
     }
 
     /**

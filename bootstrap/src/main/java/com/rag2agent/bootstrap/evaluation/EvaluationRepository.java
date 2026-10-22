@@ -1,5 +1,7 @@
 package com.rag2agent.bootstrap.evaluation;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.CaseInput;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.CaseResult;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunSummary;
@@ -10,6 +12,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -39,6 +42,7 @@ import org.springframework.stereotype.Repository;
 public class EvaluationRepository {
 
     private final JdbcTemplate jdbc;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public EvaluationRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -60,13 +64,20 @@ public class EvaluationRepository {
         int inserted = 0;
         for (CaseInput evalCase : cases) {
             inserted += jdbc.update(connection -> {
-                PreparedStatement statement = connection.prepareStatement(
-                        "INSERT INTO eval_case (kb_id, question, expected_answer, golden_doc_ids) VALUES (?, ?, ?, ?)");
+                PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO eval_case
+                            (kb_id, question, expected_answer, golden_doc_ids, case_type, evidence)
+                        VALUES (?, ?, ?, ?, ?, CAST(? AS jsonb))
+                        """);
                 statement.setLong(1, kbId);
                 statement.setString(2, evalCase.question());
                 statement.setString(3, evalCase.expectedAnswer());
                 // 将 List<Long> 转换为 PostgreSQL 数组类型
                 statement.setArray(4, connection.createArrayOf("bigint", evalCase.goldenDocumentIds().toArray()));
+                statement.setString(5, evalCase.caseType() == null
+                        ? "RAG"
+                        : evalCase.caseType().trim().toUpperCase(java.util.Locale.ROOT));
+                statement.setString(6, json(evalCase.evidence()));
                 return statement;
             });
         }
@@ -81,13 +92,19 @@ public class EvaluationRepository {
      */
     public List<EvalCase> listCases(Long kbId) {
         return jdbc.query(
-                "SELECT id, kb_id, question, expected_answer, golden_doc_ids FROM eval_case WHERE kb_id = ? ORDER BY id",
+                """
+                SELECT id, kb_id, question, expected_answer, golden_doc_ids,
+                       case_type, CAST(evidence AS text) AS evidence
+                FROM eval_case WHERE kb_id = ? ORDER BY id
+                """,
                 (rs, rowNum) -> new EvalCase(
                         rs.getLong("id"),
                         rs.getLong("kb_id"),
                         rs.getString("question"),
                         rs.getString("expected_answer"),
-                        toLongList(rs.getArray("golden_doc_ids"))),
+                        toLongList(rs.getArray("golden_doc_ids")),
+                        rs.getString("case_type"),
+                        evidence(rs.getString("evidence"))),
                 kbId);
     }
 
@@ -337,7 +354,8 @@ public class EvaluationRepository {
     public List<EvalCase> listRunCases(long runId) {
         return jdbc.query(
                 """
-                SELECT c.id, c.kb_id, c.question, c.expected_answer, c.golden_doc_ids
+                SELECT c.id, c.kb_id, c.question, c.expected_answer, c.golden_doc_ids,
+                       c.case_type, CAST(c.evidence AS text) AS evidence
                 FROM eval_run r
                 JOIN eval_case c ON c.id = ANY(r.case_ids)
                 WHERE r.id = ? ORDER BY c.id
@@ -347,7 +365,9 @@ public class EvaluationRepository {
                         rs.getLong("kb_id"),
                         rs.getString("question"),
                         rs.getString("expected_answer"),
-                        toLongList(rs.getArray("golden_doc_ids"))),
+                        toLongList(rs.getArray("golden_doc_ids")),
+                        rs.getString("case_type"),
+                        evidence(rs.getString("evidence"))),
                 runId);
     }
 
@@ -490,6 +510,25 @@ public class EvaluationRepository {
         return List.copyOf(result);
     }
 
+    private String json(Map<String, Object> evidence) {
+        try {
+            return objectMapper.writeValueAsString(evidence == null ? Map.of() : evidence);
+        } catch (Exception exception) {
+            throw new IllegalArgumentException("Gold Set evidence 序列化失败", exception);
+        }
+    }
+
+    private Map<String, Object> evidence(String value) {
+        if (value == null || value.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(value, new TypeReference<>() {});
+        } catch (Exception exception) {
+            throw new IllegalStateException("Gold Set evidence 解析失败", exception);
+        }
+    }
+
     /**
      * 设置可空的 Double 参数
      */
@@ -528,7 +567,20 @@ public class EvaluationRepository {
      * @param goldenDocumentIds  相关文档ID列表（人工标注）
      */
     public record EvalCase(
-            Long id, Long kbId, String question, String expectedAnswer, List<Long> goldenDocumentIds) {}
+            Long id,
+            Long kbId,
+            String question,
+            String expectedAnswer,
+            List<Long> goldenDocumentIds,
+            String caseType,
+            Map<String, Object> evidence) {
+
+        public EvalCase(
+                Long id, Long kbId, String question, String expectedAnswer,
+                List<Long> goldenDocumentIds) {
+            this(id, kbId, question, expectedAnswer, goldenDocumentIds, "RAG", Map.of());
+        }
+    }
 
     /**
      * 创建任务的结果

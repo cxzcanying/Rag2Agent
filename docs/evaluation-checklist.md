@@ -68,7 +68,8 @@
 ## 评测集构建要求
 
 - 从真实知识库抽样构建 100+ 条（question + expected_answer + golden_doc_ids），对应 eval_case 表；
-- 覆盖各评测项场景：精确词（编号/API 名）、疑问句语义、关系型多跳（图检索项）；
+- 覆盖五类发布门禁场景：RAG、跨页 TABLE、MULTIMODAL、GRAPH 和 AGENT；
+- 每类用例都在 `evidence` 中声明可定位证据：表格需 `tableId/headers/rowIds`，多模态需 `assetIds`，图需 `entities/maxHops`，Agent 需 `requiredTools/maxSteps`；
 - 配置矩阵实验：切块 × 检索策略 × 重排开关，结果入库可回溯；
 - CI 跑核心评测子集做冒烟，防止改动劣化。
 
@@ -85,14 +86,28 @@
     {
       "question": "如何申请年假？",
       "expectedAnswer": "按制度提交年假申请。",
-      "goldenDocumentIds": [12]
+      "goldenDocumentIds": [12],
+      "caseType": "RAG",
+      "evidence": {}
+    },
+    {
+      "question": "2026 年第二季度营收是多少？",
+      "expectedAnswer": "从跨页续表读取目标行。",
+      "goldenDocumentIds": [13],
+      "caseType": "TABLE",
+      "evidence": {
+        "tableId": "table-4",
+        "headers": ["指标", "2025", "2026"],
+        "rowIds": ["row-17"]
+      }
     }
   ]
 }
 ```
 
-4. 调用 `POST /api/evaluations/runs` 运行单个配置，或调用 `/api/evaluations/matrix` 批量比较 `strategy/topK/candidateTopK/rrfK/rerankEnabled`。
-5. 评测结果写入 `eval_run` 和 `eval_case_result`，页面“评测”页可查看历史聚合指标。生成与裁判默认关闭，开启 `evaluateGeneration` 才会消耗模型额度。
+4. 调用 `GET /api/evaluations/gold-set/coverage?kbId=1` 检查五类覆盖、缺失类别和证据违规项；发布门禁要求 `missingCategories` 与 `violations` 都为空。
+5. 调用 `POST /api/evaluations/runs` 运行单个配置，或调用 `/api/evaluations/matrix` 批量比较 `strategy/topK/candidateTopK/rrfK/rerankEnabled`。
+6. 评测结果写入 `eval_run` 和 `eval_case_result`，页面“评测”页可查看历史聚合指标。生成与裁判默认关闭，开启 `evaluateGeneration` 才会消耗模型额度。
 
 ## D13 本次执行结果（2026-08-18）
 

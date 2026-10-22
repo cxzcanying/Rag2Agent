@@ -577,7 +577,10 @@ Neo4j 关系：
 - 知识库 ACL 支持 `VIEWER`、`EDITOR`、`ADMIN` 成员角色；owner 和 ADMIN 可维护成员，读权限与写权限分离。
 - 检索、Agent、图、文档、评测和记忆入口已统一走知识库读写或管理校验，子资源继承知识库权限边界。
 - 已提供知识库可见性更新、成员列表、授权和撤销 API；历史数据迁移后归入默认租户和组织。
+- `eval_case` 已增加 `case_type` 和 `evidence`，支持 `RAG/TABLE/MULTIMODAL/GRAPH/AGENT` 五类用例及场景证据契约。
+- 评测导入会拒绝缺少表头和行、图片资产、图实体/跳数或 Agent 工具/步数证据的用例；`GET /api/evaluations/gold-set/coverage` 返回分类计数、缺失类别和违规项。
 - 待完成数据库 RLS/强制租户查询视图、完整越权矩阵和跨租户集成验收。
+- 待完成五类真实业务样本扩充、分类阈值预注册和允许自动执行的 Agent 轨迹评分器。
 
 ## 9. 依赖关系
 

@@ -11,6 +11,7 @@ import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 /**
  * @author 21311
@@ -22,7 +23,14 @@ public final class EvaluationDtos {
     public record CaseInput(
             @NotBlank(message = "question 不能为空") String question,
             String expectedAnswer,
-            @NotEmpty(message = "goldenDocumentIds 不能为空") List<@Positive Long> goldenDocumentIds) {}
+            @NotEmpty(message = "goldenDocumentIds 不能为空") List<@Positive Long> goldenDocumentIds,
+            String caseType,
+            Map<String, Object> evidence) {
+
+        public CaseInput(String question, String expectedAnswer, List<Long> goldenDocumentIds) {
+            this(question, expectedAnswer, goldenDocumentIds, "RAG", Map.of());
+        }
+    }
 
     public record ImportCasesRequest(
             @NotNull(message = "kbId 不能为空") @Positive Long kbId,
@@ -153,4 +161,17 @@ public final class EvaluationDtos {
             Instant startedAt,
             Instant completedAt,
             String errorMessage) {}
+
+    public record GoldSetViolation(Long caseId, String caseType, String message) {}
+
+    public record GoldSetCoverage(
+            int totalCases,
+            Map<String, Integer> caseCounts,
+            List<String> missingCategories,
+            List<GoldSetViolation> violations) {
+
+        public boolean valid() {
+            return missingCategories.isEmpty() && violations.isEmpty();
+        }
+    }
 }

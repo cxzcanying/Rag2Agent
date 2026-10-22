@@ -4,6 +4,7 @@ import com.rag2agent.bootstrap.dto.EvaluationDtos.ImportCasesRequest;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.MatrixRequest;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunRequest;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.CaseResult;
+import com.rag2agent.bootstrap.dto.EvaluationDtos.GoldSetCoverage;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunStatus;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunSubmission;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunSummary;
@@ -130,5 +131,14 @@ public class EvaluationController {
         knowledgeBaseService.requireWritable(StpUtil.getLoginIdAsLong(), status.kbId());
         evaluationService.cancel(runId);
         return ApiResponse.success(null);
+    }
+
+    @GetMapping("/gold-set/coverage")
+    public ApiResponse<GoldSetCoverage> goldSetCoverage(@RequestParam Long kbId) {
+        if (kbId == null || kbId <= 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "kbId 必须为正数");
+        }
+        knowledgeBaseService.requireReadable(StpUtil.getLoginIdAsLong(), kbId);
+        return ApiResponse.success(evaluationService.goldSetCoverage(kbId));
     }
 }
