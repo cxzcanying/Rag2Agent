@@ -129,6 +129,84 @@ public class KnowledgeGraphRepository {
         }
     }
 
+    public void rebuildCommunities(Long kbId) {
+        String graphName = "rag2agent-kb-" + kbId;
+        try (var session = session()) {
+            session.executeWriteWithoutResult(tx -> {
+                tx.run("CALL gds.graph.drop($graphName, false)", Map.of("graphName", graphName));
+                tx.run("""
+                        CALL gds.graph.project.cypher(
+                          $graphName,
+                          'MATCH (e:Entity {kb_id: $kbId}) RETURN id(e) AS id',
+                          'MATCH (a:Entity {kb_id: $kbId})-[r:RELATED]-(b:Entity {kb_id: $kbId}) ' +
+                          'RETURN id(a) AS source, id(b) AS target, coalesce(r.confidence, 0.0) AS weight',
+                          {parameters: {kbId: $kbId}}
+                        )
+                        """, Map.of("graphName", graphName, "kbId", kbId));
+                tx.run("""
+                        CALL gds.leiden.write($graphName, {
+                          writeProperty: 'communityId',
+                          relationshipWeightProperty: 'weight'
+                        })
+                        """, Map.of("graphName", graphName));
+                tx.run("CALL gds.graph.drop($graphName, false)", Map.of("graphName", graphName));
+                tx.run("""
+                        MATCH (e:Entity {kb_id: $kbId})
+                        WHERE e.communityId IS NOT NULL
+                        MERGE (c:Community {
+                          kb_id: $kbId,
+                          community_id: e.communityId
+                        })
+                        SET c.updated_at = timestamp()
+                        MERGE (e)-[:IN_COMMUNITY]->(c)
+                        """, Map.of("kbId", kbId));
+            });
+        }
+    }
+
+    public List<CommunityEntities> communities(Long kbId, int limit) {
+        try (var session = session()) {
+            return session.executeRead(tx -> tx.run("""
+                    MATCH (e:Entity {kb_id: $kbId})-[:IN_COMMUNITY]->(c:Community {kb_id: $kbId})
+                    RETURN c.community_id AS communityId,
+                           collect(e.canonical_name)[0..30] AS entities,
+                           count(e) AS entityCount
+                    ORDER BY entityCount DESC
+                    LIMIT $limit
+                    """, Map.of("kbId", kbId, "limit", limit)).stream()
+                    .map(record -> new CommunityEntities(
+                            record.get("communityId").asLong(),
+                            record.get("entities").asList(value -> value.asString()),
+                            record.get("entityCount").asLong()))
+                    .toList());
+        }
+    }
+
+    public void saveCommunitySummary(Long kbId, long communityId, String summary) {
+        try (var session = session()) {
+            session.executeWriteWithoutResult(tx -> tx.run("""
+                    MATCH (c:Community {kb_id: $kbId, community_id: $communityId})
+                    SET c.summary = $summary, c.summary_updated_at = timestamp()
+                    """, Map.of("kbId", kbId, "communityId", communityId, "summary", summary)));
+        }
+    }
+
+    public List<CommunitySummary> communitySummaries(Long kbId, int limit) {
+        try (var session = session()) {
+            return session.executeRead(tx -> tx.run("""
+                    MATCH (c:Community {kb_id: $kbId})
+                    WHERE c.summary IS NOT NULL
+                    RETURN c.community_id AS communityId, c.summary AS summary
+                    ORDER BY c.summary_updated_at DESC
+                    LIMIT $limit
+                    """, Map.of("kbId", kbId, "limit", limit)).stream()
+                    .map(record -> new CommunitySummary(
+                            record.get("communityId").asLong(),
+                            record.get("summary").asString()))
+                    .toList());
+        }
+    }
+
     private org.neo4j.driver.Session session() {
         return driver.session(SessionConfig.builder()
                 .withDatabase(properties.getDatabase())
@@ -164,4 +242,9 @@ public class KnowledgeGraphRepository {
             String target,
             List<String> nodes,
             double score) {}
+
+    public record CommunityEntities(
+            long communityId, List<String> entities, long entityCount) {}
+
+    public record CommunitySummary(long communityId, String summary) {}
 }

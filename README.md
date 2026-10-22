@@ -235,6 +235,8 @@ GET  /api/agent/runs/{runId}/tasks
 GET  /api/agent/memories?kbId={kbId}&limit={limit}
 DELETE /api/agent/memories/{memoryId}
 POST /api/agent/teams/research
+POST /api/knowledge-bases/{kbId}/graph/communities/refresh
+GET  /api/knowledge-bases/{kbId}/graph/communities?limit={limit}
 
 POST /api/evaluations/cases/import
 POST /api/evaluations/runs

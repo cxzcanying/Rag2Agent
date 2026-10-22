@@ -125,6 +125,7 @@ services:
     container_name: rag2agent-neo4j
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-rag2agent-password}
+      NEO4J_PLUGINS: '["graph-data-science"]'
     ports:
       - "17474:7474"
       - "17687:7687"
