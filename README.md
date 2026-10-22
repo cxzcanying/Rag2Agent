@@ -1,13 +1,15 @@
 # RAG2Agent
 
-> 企业级 RAG + 可控 Agent 后端工程。基于 Java 21 + Spring Boot 3.5 的多模块后端与 Vue 3 前端，本地跑通「登录 → 上传 PDF → 异步入库 → 混合检索 → 带引用回答 → Agent 工具审批 → 异步评测」完整闭环，重点验证可靠性、可观测性和任务恢复边界。
+> 企业级多模态 RAG + 可控 Agent 平台。基于 Java 21 + Spring Boot 3.5 的多模块后端与 Vue 3 前端，跑通「多格式文档解析 → 异步入库 → 表格/图片语义索引 → 向量 + 关键词 + GraphRAG 混合检索 → 带证据回答 → 工具审批 → 并行多 Agent → Gold Set 评测」完整闭环。
 
 ![Java](https://img.shields.io/badge/Java-21-007396?logo=openjdk&logoColor=white)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5.7-6DB33F?logo=spring&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)
+![Neo4j](https://img.shields.io/badge/Neo4j%20GDS-2.13-4581C3?logo=neo4j&logoColor=white)
+![MCP](https://img.shields.io/badge/MCP-Java%20SDK%202.0-6B57FF)
 
-这是一个依赖本地中间件的工程样例，不是开箱即用的单文件产品。当前权限边界是知识库 owner 级别，Neo4j 仍属基础设施预留；MCP 已提供项目内 JSON-RPC HTTP 子集，GraphRAG 尚未实现。
+当前版本为 [V3 企业验收版](https://github.com/cxzcanying/Rag2Agent/releases/tag/v3)。项目依赖 PostgreSQL、Redis、MinIO、RocketMQ、Neo4j、Docling、Jaeger 等本地中间件，完整拓扑通过 Docker Compose 启动。V3 已完成多模态文档、跨页表格、局部/全局 GraphRAG、MCP 2.0、持久 Agent Runtime、并行多 Agent、tenant/org/kb ACL 与五类 Gold Set 的端到端验收，详见 [V3 Docker 验收报告](docs/v3-docker-acceptance-report.md)。
 
 ## 目录
 
@@ -30,32 +32,37 @@
 
 | 领域 | 已实现 |
 | --- | --- |
-| 账号与权限 | 注册、登录、Sa-Token 会话；知识库 owner 校验覆盖文档、检索、Agent 工具、评测和审批入口 |
-| 文档入库 | 文件上传到 MinIO；RocketMQ 异步处理；默认使用 PDFBox 解析 PDF，启用 Docling 后支持 DOCX、PPTX、XLSX、HTML、图片和邮件，并持久化文档元素、逻辑表格、表格行与资产；递归切块和表格行上下文 chunk、Embedding（批量 + 片段级缓存）、版本化写入 PostgreSQL/pgvector；启动/周期扫描自动恢复非终态中断任务 |
-| 检索 | Query Routing；向量检索与 `pg_trgm` 关键词检索并行；RRF 融合；可选 Rerank；返回引用来源 |
-| Agent | OpenAI-compatible function calling；工具 schema/权限/审计/超时；写操作审批；SSE 对话；上下文压缩；最大步数（10）与全局工具调用数（默认 20）双层封顶后的强制总结 |
+| 账号与权限 | 注册、登录、Sa-Token 会话；tenant/org/knowledge-base ACL；`PRIVATE/ORGANIZATION/TENANT` 可见性和 `VIEWER/EDITOR/ADMIN` 成员角色；文档、表格、资产、图谱、记忆、评测入口统一校验 |
+| 多模态入库 | 文件上传 MinIO，RocketMQ 异步处理；Docling 解析 PDF、DOCX、PPTX、XLSX、HTML、图片和邮件，递归映射嵌套正文、表格、图片与 bbox；持久化元素、逻辑表格、行级语义文本和资产；支持跨页续表、重复表头、稳定行游标与页码证据 |
+| 图片理解 | Qwen3-VL provider 可配置；图片语义描述进入普通检索；Vision 不可用时自动降级 Docling OCR；图片资产通过权限受控的 presigned URL 提供 |
+| 混合检索 | Query Routing；pgvector 向量、`zhparser/pg_trgm` 中文关键词、Neo4j 图路径三路并行召回；RRF 融合和 Rerank；表格命中自动扩展表标题、完整表头、相邻行和页码 |
+| GraphRAG | 实体/关系/证据元素抽取并写入 Neo4j；1-3 跳受限路径查询进入混合检索；GDS Leiden 社区发现、社区摘要、局部/全局图工具；图分支独立限额与故障降级 |
+| Agent Runtime | OpenAI-compatible function calling；推理档位与动态路由；Session/Event/Checkpoint、上下文压缩、长期记忆、工具审批摘要、SSE 回放、请求幂等、预算、取消传播和任务依赖阻塞 |
+| 多 Agent | Coordinator → 并行 Analyst → Reviewer；Worker 独立上下文以及 Token、工具和时长预算；单 Worker 失败隔离并返回 `DEGRADED`，Reviewer 只依赖成功任务 |
+| MCP | 官方 MCP Java SDK 2.0 Streamable HTTP；协议版本协商、工具、资源、提示词、会话恢复；Bearer + scope 鉴权；未声明只读的远程工具默认审批 |
 | AI 可靠性 | 超时、重试、熔断、降级、并发舱壁；Redis Lua 令牌桶用户限流；失败响应统一脱敏 |
 | 缓存 | 查询向量与正文切片共用 Caffeine L1 + Redis L2 片段级缓存（批量 `getOrComputeBatch`），single-flight + 内容寻址 key（含 provider/model/维度/模型版本）复用未变切片，未命中才批量回源 |
-| 可观测性 | Micrometer 指标、Prometheus、OpenTelemetry OTLP、Jaeger、JSON 日志；HTTP/检索/LLM/工具/MQ trace context 基础链路 |
-| 评测 | 用例导入、单配置/矩阵提交；异步 run、进度查询、逐题结果、取消、失败/超时、重启恢复和 `Idempotency-Key` 幂等 |
-| 前端 | Vue 3 + Vite；登录、知识库/文档、对话审批、评测进度和取消页面 |
+| 可观测性 | Micrometer、Prometheus、OpenTelemetry OTLP、Jaeger、JSON 日志；HTTP/检索/LLM/工具/MQ trace context；Token、成本、预算和线程池指标 |
+| 评测 | 异步 run、逐题结果、取消和恢复；`RAG/TABLE/MULTIMODAL/GRAPH/AGENT` 五类 Gold Set、证据契约、覆盖率门禁；Hit@k、MRR、Faithfulness、Answer Correctness |
+| 前端 | Vue 3 + Vite；登录、文档、对话审批、评测进度、知识库成员/可见性管理、Gold Set 覆盖率门禁 |
 
 ## 项目亮点
 
-RAG2Agent 的定位不是「能检索、能对话」的单点 Demo，而是把企业内部落地最常踩的可靠性、可观测性、任务恢复和成本治理做成内建回路的企业级 RAG + Agent 底座样例。相比直接用通用框架拼装或常见快速 Demo，差异集中在下面几点，且都有可复现的验收证据：
+V3 的重点是把“能检索、能对话”推进到“证据完整、流程可控、失败可恢复、权限可验证”。所有关键能力均有代码、单测或 Docker 端到端证据：
 
-| 维度 | 本项目（RAG2Agent） | 通用框架 / 快速 Demo 的常见取舍 |
+| 维度 | V3 已落地能力 | 验证结果 |
 | --- | --- | --- |
-| 可靠性 | 请求级幂等（`clientRequestId` 唯一约束）+ 会话锁租约续期、Redis Lua 令牌桶限流、超时/重试/熔断/降级、并发舱壁、失败响应统一脱敏、审批超时自动终态化 | 通常依赖中间件或插件编排，幂等、限流、熔断与恢复边界往往要自己补齐 |
-| 可观测性 | Micrometer + Prometheus + OpenTelemetry/Jaeger，HTTP → 检索 → LLM → 工具 → MQ 全链路 trace context，JSON 结构化日志，业务指标命名与 `outcome` 约定 | 常见只有调用日志或 HTTP 监控，链路追踪、业务指标与日志串联多是后续拼装 |
-| 任务恢复 | 异步入库与评测断点续跑、启动/周期扫描自动恢复非终态入库任务（`IngestRecoveryService`）、应用重启从 `eval_run` 恢复、RocketMQ DLQ 死信读取回投、评测任务幂等 | 任务状态常放内存或依赖线程，重启/超时/重复消费的恢复边界不清晰 |
-| 检索与评测 | 向量 + `pg_trgm` 关键词双路 + RRF 融合 + 可选重排，内置用例导入/单配置/矩阵评测（Hit@k、MRR、Faithfulness）、可复现实验入口 | 检索通常只给链路，评测数据、指标与调参闭环要单独搭建 |
-| 中文检索 | `zhparser` 中文分词 + 二元切分回退，用固定 MIRACL zh 子集做 A/B，关键词 Hit@5 有可量化提升 | 通用检索对中文关键词召回普遍偏弱，且常无本地评测佐证 |
-| 成本治理 | AI usage 账本（`ai_usage_ledger`），价格版本/币种/分时与缓存 token 单价，Token 估算偏差校准；片段级 Embedding 缓存复用未变切片，降低重复向量化成本 | 常见缺少可对账的成本数据，额度与开销难以回溯 |
-| Agent 安全 | 工具 schema/权限/审计/超时、写操作人工审批、无引用不答、提示注入规则信号、最大步数（10）与全局工具调用数（默认 20）双层封顶、审批超时自动终态化 | 工具调用常见「能用」即止，审批、审计、注入防护边界要自行设计 |
-| 排查闭环 | 前端聊天消息携带 traceId（诊断 ID），错误日志可按 traceId 检索 | 前端与排查链路常割裂，出问题时难以定位到具体请求 |
+| 多模态与表格 | Docling 解析、嵌套元素、逻辑表格、续表合并、图片 OCR/Vision、资产证据 | PDF/HTML/PNG 和真实双页 PDF 验收；7 行续表合并为 1 张表，页码 `1-2` |
+| 混合检索 | 向量 + 中文关键词 + 图路径并行，RRF + Rerank；图召回限额和表格上下文扩展 | 表格查询可恢复表标题、完整表头和相邻行；GraphRAG 查询返回可解释路径 |
+| GraphRAG | 文档实体/关系/证据边、路径查询、GDS 社区发现与摘要 | Neo4j GDS `2.13.12`；社区刷新生成 6 个主题摘要 |
+| Agent Runtime | 推理路由、持久事件/检查点、工具审批、幂等、预算、记忆、取消传播 | 审批摘要绑定、取消级联、依赖阻塞和事件回放均有测试 |
+| 多 Agent | Retriever → N Analyst → Reviewer，独立上下文和 Worker 预算 | 真实并行研究任务返回 `COMPLETED`，单 Worker 失败可降级 |
+| 企业权限 | tenant/org/kb ACL、可见性、成员角色、所有子资源继承边界 | 跨用户授权前不可见、授权后只读、`VIEWER` 写操作被拒绝 |
+| MCP | 官方 Java SDK 2.0 Streamable HTTP、工具/资源/提示词/能力协商 | 官方客户端完成 initialize、发现、调用；Bearer/scope 鉴权通过 |
+| 发布门禁 | 五类 Gold Set 证据契约、覆盖率和违规项 | 五类各 1 条验收用例，`valid=true`、缺失 0、违规 0 |
+| 工程验证 | Docker 全链路、Maven reactor、Vite build | 8 个服务 healthy；140/140 测试通过；前端生产构建通过 |
 
-这些能力可以在本地 `docker compose --profile full up -d` + 真实模型上复现，验收证据见 [docs/v2-validation-report.md](docs/v2-validation-report.md)。它仍是工程样例而非生产成品：多租户 ACL、GraphRAG、配置中心、财务审计、自动调参数据飞轮等仍属路线图（见[边界与路线图](#边界与路线图)）。
+验收环境、指标、问题修复和边界见 [V3 Docker 验收报告](docs/v3-docker-acceptance-report.md)。当前版本仍是单机工程级部署：数据库 RLS、全链路容量压测、K8s/Helm、正式 OAuth 身份系统和真实业务 Gold Set 属于后续生产化范围。
 
 ## 技术栈
 
@@ -73,11 +80,14 @@ RAG2Agent 的定位不是「能检索、能对话」的单点 Demo，而是把�
 | 缓存 / 限流 | Redis | 7.4（Alpine） |
 | 对象存储 | MinIO | 2025-09-07 release |
 | 消息队列 | RocketMQ | 5.3.2 |
-| 图数据库 | Neo4j | 5（Community，当前仅预留） |
+| 图数据库 | Neo4j + GDS | Neo4j 5 / GDS 2.13 |
+| 文档智能 | Docling Serve | 1.36（CPU sidecar） |
+| Vision | Qwen3-VL | 可配置 OpenAI-compatible provider |
+| 工具协议 | MCP Java SDK | 2.0 Streamable HTTP |
 | 链路追踪 | Jaeger | 1.60（all-in-one） |
 | 覆盖率 / 校验 | Spotless | 2.46.1（代码格式校验） |
 
-`infra-ai` 提供 Chat、Embedding、Rerank 抽象，当前配置了 DeepSeek（chat）和 SiliconFlow（embedding / rerank / 定价）。
+`infra-ai` 提供 Chat、Embedding、Rerank、Vision 和文档智能抽象，当前配置 DeepSeek（chat）、SiliconFlow（embedding / rerank / 定价）、Qwen3-VL（vision）及 Docling。
 
 ## 架构与模块
 
@@ -86,10 +96,10 @@ RAG2Agent 的定位不是「能检索、能对话」的单点 Demo，而是把�
 | 模块 | 职责 |
 | --- | --- |
 | `framework` | 通用响应、错误处理、Redis、鉴权和持久化基础设施 |
-| `infra-ai` | 按 capability 选择 active provider；Chat、Embedding、Rerank、VectorStore 接口和客户端 |
-| `rag-core` | 解析、切块、检索、融合、重排和 Prompt 相关核心能力 |
-| `mcp-server` | MCP 远程工具发现/调用契约与 HTTP JSON-RPC 服务 |
-| `bootstrap` | Spring Boot 启动模块、Controller、Agent、评测、MQ 消费和数据库访问 |
+| `infra-ai` | 按 capability 选择 active provider；Chat、Embedding、Rerank、Vision、DocumentIntelligence 接口和客户端 |
+| `rag-core` | Docling 映射、切块、检索、RRF、重排、StructuredDocument 和 Prompt 相关核心能力 |
+| `mcp-server` | MCP Java SDK 2.0 Streamable HTTP、工具/资源/提示词、Bearer/scope 鉴权 |
+| `bootstrap` | Spring Boot 启动、持久 Agent Runtime、多 Agent、GraphRAG、ACL、评测、MQ 消费和数据库访问 |
 | `web` | Vue 3 前端 |
 
 依赖主线：`framework` / `infra-ai` 为底座，`rag-core` 依赖 `infra-ai`，`bootstrap` 聚合全部并对外提供服务，`web` 调用 `bootstrap`。完整选型、演进路线与模块边界参见 [docs/tech-selection.md](docs/tech-selection.md)。
@@ -110,30 +120,33 @@ RAG2Agent 的定位不是「能检索、能对话」的单点 Demo，而是把�
 ```powershell
 Copy-Item -LiteralPath .env.example -Destination .env
 # 编辑 .env，至少填写 DEEPSEEK_API_KEY 和 SILICONFLOW_API_KEY
+# 要验证 Vision，再填写 DASHSCOPE_API_KEY 并设置 RAG2AGENT_QWEN_VL_ENABLED=true
 
-# Demo：PostgreSQL + Redis + MinIO（默认）
-$env:RAG2AGENT_MQ_ENABLED="false"
-docker compose up -d
+# 中文关键词完整能力：构建带 zhparser 的 PostgreSQL 镜像
+docker build -t rag2agent-postgres:pg17-zhparser docker/postgres
+$env:RAG2AGENT_POSTGRES_IMAGE="rag2agent-postgres:pg17-zhparser"
 
-# 完整拓扑：追加 RocketMQ、Neo4j、Jaeger
+# 完整拓扑：PostgreSQL、Redis、MinIO、Docling、RocketMQ、Neo4j、Jaeger
 docker compose --profile full up -d
 
-# 完整异步入库需开启 RocketMQ（PowerShell）
+# 启动后端并启用完整能力
 $env:RAG2AGENT_MQ_ENABLED="true"
+$env:RAG2AGENT_DOCLING_ENABLED="true"
+$env:RAG2AGENT_NEO4J_ENABLED="true"
 mvn -pl bootstrap spring-boot:run
 ```
 
-`application.yml` 默认使用 `dev` profile，连接宿主机映射端口。首次启动会由 PostgreSQL 初始化脚本自动建表；复用旧数据卷时需手动按顺序补跑未执行的初始化脚本（包括 [006_ai_usage_ledger.sql](docker/postgres/init/006_ai_usage_ledger.sql)）。初始化脚本只会在新卷首次启动时自动执行。
+`application.yml` 默认使用 `dev` profile，连接宿主机映射端口。首次创建数据卷时会自动执行 `docker/postgres/init/001-015`；复用旧数据卷时必须手动按顺序补跑未执行脚本，直到 [015_gold_set.sql](docker/postgres/init/015_gold_set.sql)。初始化脚本只会在新卷首次启动时自动执行。
 
 中文关键词检索默认使用 `RAG2AGENT_CHINESE_SEARCH_MODE=auto`：检测到 `zhparser` 时走 PostgreSQL `tsvector`，否则回退二元切分。要启用 PG17 的 `zhparser` 镜像：
 
 ```powershell
 docker build -t rag2agent-postgres:pg17-zhparser docker/postgres
 $env:RAG2AGENT_POSTGRES_IMAGE="rag2agent-postgres:pg17-zhparser"
-docker compose up -d
+docker compose --profile full up -d
 ```
 
-构建失败时继续使用默认 `pgvector/pg17` 即可。
+`zhparser` 是中文关键词能力的推荐路径；未启用时服务会按配置回退到二元切分。
 
 ### 前端
 
@@ -155,8 +168,9 @@ Vite 开发服务器会将 `/api` 代理到 `http://localhost:18080`。启动后
 | PostgreSQL | 15432 | 数据库 |
 | Redis | 16379 | 缓存、限流和 Agent 上下文 |
 | MinIO | 9000 / 9001 | 对象存储 / 控制台 |
+| Docling Serve | 15001 | 文档解析 sidecar |
 | RocketMQ | 19876、19091、19111、19112 | NameServer、Broker 通信 |
-| Neo4j | 17474 / 17687 | Browser / Bolt；当前仅预留 |
+| Neo4j | 17474 / 17687 | Browser / Bolt；GraphRAG 与 GDS |
 | Jaeger | 16686、4317、4318 | UI / OTLP gRPC / OTLP HTTP |
 
 项目刻意使用高位端口，避免 Windows 动态保留端口导致「端口占用但查不到进程」。端口与中间件注意事项见 [docs/pitfalls-and-verification.md](docs/pitfalls-and-verification.md)。
@@ -196,9 +210,15 @@ RAG2AGENT_NEO4J_URI=bolt://localhost:17687
 RAG2AGENT_QWEN_VL_ENABLED=false
 QWEN_VL_MODEL=qwen3-vl-flash
 DASHSCOPE_API_KEY=
+RAG2AGENT_TEAM_ANALYST_WORKERS=2
+RAG2AGENT_TEAM_WORKER_TOKEN_BUDGET=12000
+RAG2AGENT_TEAM_WORKER_TOOL_BUDGET=2
+RAG2AGENT_TEAM_WORKER_TIMEOUT_MILLIS=60000
+RAG2AGENT_DEFAULT_TENANT_ID=1
+RAG2AGENT_DEFAULT_ORGANIZATION_ID=1
 ```
 
-`RAG2AGENT_MQ_ENABLED`、`RAG2AGENT_CHINESE_SEARCH_MODE`、`RAG2AGENT_EMBEDDING_*`、`RAG2AGENT_RATE_LIMIT_*`、`RAG2AGENT_AI_RESILIENCE_*`、`RAG2AGENT_MCP_REMOTE_*`、`RAG2AGENT_DOCLING_*` 等均可在 `.env` 或环境变量中覆盖，默认值见 `bootstrap/src/main/resources/application.yml`。价格相关变量以 `DEEPSEEK_*_PRICE_*` / `SILICONFLOW_*_PRICE_*` 前缀为主，默认使用官方分时 / 免费用量口径。
+`RAG2AGENT_MQ_ENABLED`、`RAG2AGENT_CHINESE_SEARCH_MODE`、`RAG2AGENT_EMBEDDING_*`、`RAG2AGENT_RATE_LIMIT_*`、`RAG2AGENT_AI_RESILIENCE_*`、`RAG2AGENT_MCP_REMOTE_*`、`RAG2AGENT_DOCLING_*`、`RAG2AGENT_TEAM_*` 等均可在 `.env` 或环境变量中覆盖，默认值见 `bootstrap/src/main/resources/application.yml`。价格相关变量以 `DEEPSEEK_*_PRICE_*` / `SILICONFLOW_*_PRICE_*` 前缀为主，默认使用官方分时 / 免费用量口径。
 
 Docling 默认关闭；执行 `docker compose --profile docling up -d` 后开启 `RAG2AGENT_DOCLING_ENABLED=true`，即可解析非 PDF 文档、扫描件并提供表格结构。sidecar 仅绑定本机 `15001` 端口，解析结果中的元素、表格、表格行和资产会随文档版本写入 `009_document_intelligence.sql` 创建的结构表。
 
@@ -217,6 +237,10 @@ GET  /api/auth/me
 
 POST /api/knowledge-bases
 GET  /api/knowledge-bases
+PATCH /api/knowledge-bases/{kbId}/visibility
+GET  /api/knowledge-bases/{kbId}/members
+POST /api/knowledge-bases/{kbId}/members
+DELETE /api/knowledge-bases/{kbId}/members/{userId}
 POST /api/documents/upload
 GET  /api/documents?kbId={kbId}
 GET  /api/documents/{id}/presign
@@ -230,6 +254,7 @@ POST /api/search/multimodal
 
 POST /api/chat                         # SSE
 POST /api/agent/approvals/{runId}
+POST /api/agent/runs/{runId}/cancel
 GET  /api/agent/sessions/{sessionId}/events?afterSeq={seq}&limit={limit}
 GET  /api/agent/runs/{runId}/tasks
 GET  /api/agent/memories?kbId={kbId}&limit={limit}
@@ -241,6 +266,7 @@ GET  /api/knowledge-bases/{kbId}/graph/communities?limit={limit}
 POST /api/evaluations/cases/import
 POST /api/evaluations/runs
 POST /api/evaluations/matrix
+GET  /api/evaluations/gold-set/coverage?kbId={kbId}
 GET  /api/evaluations/runs?kbId={kbId}
 GET  /api/evaluations/runs/{runId}
 GET  /api/evaluations/runs/{runId}/results
@@ -294,11 +320,19 @@ Content-Type: application/json
     {
       "question": "如何申请年假？",
       "expectedAnswer": "按制度提交年假申请。",
-      "goldenDocumentIds": [12]
+      "goldenDocumentIds": [12],
+      "caseType": "TABLE",
+      "evidence": {
+        "tableId": "tables-0",
+        "headers": ["职级", "年假天数"],
+        "rowIds": ["2"]
+      }
     }
   ]
 }
 ```
+
+`caseType` 支持 `RAG/TABLE/MULTIMODAL/GRAPH/AGENT`。导入时会校验各类证据字段；`GET /api/evaluations/gold-set/coverage?kbId={kbId}` 返回五类计数、缺失类别和违规项，`valid=true` 才通过发布门禁。
 
 `evaluateGeneration=true` 会额外调用回答模型和裁判模型，耗时及额度明显增加，建议使用异步查询而不是等待 HTTP 请求超时。
 
@@ -317,6 +351,8 @@ Set-Location -LiteralPath .\web
 npm run build
 ```
 
+V3 Docker 验收结果：Maven reactor `140/140` 通过，0 failure、0 error、0 skipped；8 个 Compose 服务健康，Vite 生产构建通过。完整证据见 [docs/v3-docker-acceptance-report.md](docs/v3-docker-acceptance-report.md)。
+
 真实模型和真实 PDF 验证需要额外的 API key、Docker 服务或环境变量：
 
 ```powershell
@@ -324,7 +360,7 @@ mvn -pl bootstrap -am test -Dtest=AiClientRealIT
 mvn -pl rag-core -am test -Dtest=RealPdfVerifyIT
 ```
 
-在未启动 MinIO 的机器上，部分 Spring context 测试可能失败；这属于外部依赖未就绪，不等同于业务单测失败。全仓 `spotless:check` 还可能被既有 `.eval-tools`、`node_modules` 等非源码目录影响，验证时应以 Maven 测试和前端构建为主。
+真实集成验收应使用 `docker compose --profile full up -d` 启动 PostgreSQL、Redis、MinIO、Docling、RocketMQ、Neo4j 和 Jaeger。上下文测试依赖外部中间件；未启动 Docker 时应区分环境失败和业务单测失败。
 
 ## CI
 
@@ -333,7 +369,7 @@ GitHub Actions（`.github/workflows/ci.yml`）针对 `main` 分支的 push / pul
 - **backend**：`setup-java`（Temurin 21）→ `mvn -B -pl infra-ai,rag-core -am test`（确定性单测）→ `mvn -B -pl bootstrap -am -DskipTests package`（reactor 编译打包）。
 - **frontend**：`setup-node`（Node 20）→ `npm ci` → `npm run build`。
 
-真实模型集成测试（`AiClientRealIT`）和真实 PDF 验证（`RealPdfVerifyIT`）需要本地依赖或环境变量，未纳入 CI。
+真实模型集成测试（`AiClientRealIT`）、真实 PDF 验证（`RealPdfVerifyIT`）和 Docker 全链路验收需要本地依赖或环境变量，未纳入当前 CI；V3 已在本地完成 Docker 全链路验收。
 
 ## 项目结构
 
@@ -343,9 +379,9 @@ RAG2Agent/
 ├── framework/          # 通用响应、错误、Redis、鉴权、持久化基础设施
 ├── infra-ai/           # AI provider 抽象：Chat/Embedding/Rerank/VectorStore
 ├── rag-core/           # 解析、切块、检索、融合、重排、Prompt 核心
-├── mcp-server/         # MCP 远程工具发现/调用契约与 HTTP JSON-RPC 服务
+├── mcp-server/         # MCP Java SDK 2.0 Streamable HTTP 服务
 ├── web/                # Vue 3 前端
-├── docker/             # 中间件镜像与 PostgreSQL 初始化脚本（001-007）
+├── docker/             # 中间件镜像与 PostgreSQL 初始化脚本（001-015）
 ├── scripts/            # 健康检查、评测数据准备/运行脚本
 ├── docs/               # 技术选型、开发计划、翻车记录、TODO、评测清单等
 └── .github/workflows/  # CI
@@ -361,20 +397,22 @@ RAG2Agent/
 - [docs/todo.md](docs/todo.md)：按优先级维护的工程问题、风险和后续任务
 - [docs/evaluation-checklist.md](docs/evaluation-checklist.md)：评测数据集、指标和可复现实验入口
 - [docs/v2-validation-report.md](docs/v2-validation-report.md)：V2 集成验收记录与真实证据
+- [docs/v3-docker-acceptance-report.md](docs/v3-docker-acceptance-report.md)：V3 多模态、GraphRAG、多 Agent、ACL 与 Gold Set 验收
+- [docs/gold-set/fixtures/](docs/gold-set/fixtures/)：可复现 HTML/跨页表格夹具
 
 ## 边界与路线图
 
-以下为当前已落地能力及其剩余边界，完整路线与待办见 [docs/todo.md](docs/todo.md)：
+V3 已落地多模态、跨页表格、局部/全局 GraphRAG、MCP 2.0、持久 Agent Runtime、并行多 Agent、ACL 和五类 Gold Set；完整路线与待办见 [docs/todo.md](docs/todo.md)。
 
-- 已接入 provider usage 与估算 token 校准指标、AI usage 账本（含缓存 token/价格版本字段）和中文检索：DeepSeek 默认使用官方 USD 分时价格，SiliconFlow BGE 模型按官方免费价记录，仍可由环境变量覆盖；默认无扩展时使用二元切分，启用 `rag2agent-postgres:pg17-zhparser` 后使用 `zhparser`；固定 MIRACL zh 子集验证了关键词和混合检索收益。完整验收证据见 [V2 集成验收记录](docs/v2-validation-report.md)。
-- SSE 已支持 Redis Stream + `Last-Event-ID` 增量回放；超出保留窗口时回退到 run 状态查询，多行事件/半包兼容性和生产级长连接治理仍需继续补强。
-- Agent 已有同一 session 的并发锁、最大步数（10）与全局工具调用数（默认 20）双层封顶、审批超时自动终态化、完整工具审计；`clientRequestId` 请求级幂等与长任务锁租约续期已落地。
-- 现有 ACL 是 owner-only，不是带共享、协作组、只读/可写/管理员角色的多租户模型；输入防御、资源配额和队列积压治理也仍在 TODO。
-- Embedding 片段级缓存复用未变切片以降低重复向量化成本，但切片向量最终仍写入 pgvector；模型升级后仍需对存量文档 `reingest` 重建，缓存只让重算更省、更一致，不改变“模型变更需重建库内向量”这一事实。
-- Neo4j 仅随 Compose 启动并保留端口，尚无实体抽取、Cypher 查询或 GraphRAG 检索链路；当前检索基线是向量 + 关键词。
-- 没有 SQLite 替代方案或 GraalVM 单文件发行物。当前 SQL 依赖 PostgreSQL 的 pgvector、JSONB、数组和全文能力，完整 Compose 是本地演示前提。
-- 评测结果目前用于人工比较切块/路由/重排配置，尚无自动调参、线上点赞/点踩反馈回流、Bad Case 自动入集的数据飞轮。
-- Agent 当前是带工具调用的状态机，尚未实现完整 Plan-and-Execute、Self-Reflection 或长期/情景记忆。
+- 权限已覆盖 tenant/org/kb、可见性和成员角色，但数据库 RLS/强制租户视图、OIDC/SSO、MCP OAuth 授权服务器、工具沙箱、SSRF/DLP/PII 和字段级脱敏仍待补齐。
+- 部署基线是单机 Docker Compose；尚未提供 app Dockerfile、K8s/Helm、多实例无状态扩容、存储主备、备份恢复演练和容量基线。
+- Agent 已持久化 Session/Event/Checkpoint、任务图、记忆、审批、取消和预算；异步多 Agent outbox、分布式死锁检测、检查点时间旅行和 Skill 注册仍未实现。
+- Vision provider 可配置并在失败时降级 Docling OCR；云端 Qwen3-VL 需要有效 `DASHSCOPE_API_KEY` 后完成真实语义描述验收，跨模态重排和区域高亮仍属后续能力。
+- GraphRAG 已具备实体/关系/证据边、局部路径、GDS 社区和摘要；实体消解、增量图更新、图谱评测集和全局摘要自动路由仍需补强。
+- 五类 Gold Set 已具备证据契约和覆盖率门禁；当前使用可复现夹具，仍需扩充真实脱敏业务文档、问答和预注册阈值。
+- CI 当前覆盖确定性单测、reactor 打包和前端构建；Docker 全链路、容量压测、混沌演练、SAST/DAST 和 SBOM 尚未纳入自动门禁。
+- Embedding 片段级缓存复用未变切片；模型升级后仍需对存量文档 `reingest` 重建库内向量。
+- 当前 SQL 依赖 PostgreSQL 的 pgvector、JSONB、数组和全文能力，不提供 SQLite 替代方案或 GraalVM 单文件发行物。
 
 ## 参与贡献
 
