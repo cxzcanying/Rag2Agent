@@ -226,6 +226,7 @@ GET  /api/documents/{documentId}/tables/{tableId}/rows?version={version}&cursor=
 GET  /api/documents/{documentId}/assets/{assetId}?version={version}
 POST /api/documents/{documentId}/assets/{assetId}/describe?version={version}
 GET  /api/search?kbId={kbId}&query={query}&topK={topK}
+POST /api/search/multimodal
 
 POST /api/chat                         # SSE
 POST /api/agent/approvals/{runId}

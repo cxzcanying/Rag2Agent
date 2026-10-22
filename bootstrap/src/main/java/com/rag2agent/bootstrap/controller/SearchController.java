@@ -1,6 +1,8 @@
 package com.rag2agent.bootstrap.controller;
 
 import com.rag2agent.bootstrap.service.HybridSearchService;
+import com.rag2agent.bootstrap.service.MultiModalSearchService;
+import com.rag2agent.bootstrap.dto.SearchDtos.MultimodalSearchResponse;
 import com.rag2agent.bootstrap.service.KnowledgeBaseService;
 import cn.dev33.satoken.stp.StpUtil;
 import com.rag2agent.framework.common.ApiResponse;
@@ -11,7 +13,10 @@ import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
  * @author 21311
@@ -22,10 +27,15 @@ public class SearchController {
 
     private final HybridSearchService searchService;
     private final KnowledgeBaseService knowledgeBaseService;
+    private final MultiModalSearchService multiModalSearchService;
 
-    public SearchController(HybridSearchService searchService, KnowledgeBaseService knowledgeBaseService) {
+    public SearchController(
+            HybridSearchService searchService,
+            KnowledgeBaseService knowledgeBaseService,
+            MultiModalSearchService multiModalSearchService) {
         this.searchService = searchService;
         this.knowledgeBaseService = knowledgeBaseService;
+        this.multiModalSearchService = multiModalSearchService;
     }
 
     @GetMapping
@@ -45,5 +55,21 @@ public class SearchController {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "topK 必须在 1~100 之间");
         }
         return ApiResponse.success(searchService.search(kbId, query, topK));
+    }
+
+    @PostMapping(value = "/multimodal", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<MultimodalSearchResponse> multimodal(
+            @RequestParam Long kbId,
+            @RequestParam(required = false) String query,
+            @RequestPart(required = false) MultipartFile image,
+            @RequestParam(defaultValue = "5") int topK)
+            throws java.io.IOException {
+        return ApiResponse.success(multiModalSearchService.search(
+                StpUtil.getLoginIdAsLong(),
+                kbId,
+                query,
+                image == null || image.isEmpty() ? null : image.getBytes(),
+                image == null ? null : image.getContentType(),
+                topK));
     }
 }
