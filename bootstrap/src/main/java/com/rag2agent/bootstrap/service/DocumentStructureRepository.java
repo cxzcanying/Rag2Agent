@@ -189,6 +189,35 @@ public class DocumentStructureRepository {
                 documentId, version, tableId, from, to);
     }
 
+    public long countElements(Long documentId, int version) {
+        Long count = jdbc.queryForObject("""
+                SELECT count(*) FROM document_element
+                WHERE document_id = ? AND version = ?
+                """, Long.class, documentId, version);
+        return count == null ? 0 : count;
+    }
+
+    public List<ElementRecord> findElements(
+            Long documentId, int version, int afterOrdinal, int limit) {
+        return jdbc.query("""
+                SELECT element_id, parent_element_id, element_type, ordinal,
+                       page_from, page_to, CAST(bbox AS text) AS bbox, text_content
+                FROM document_element
+                WHERE document_id = ? AND version = ? AND ordinal > ?
+                ORDER BY ordinal
+                LIMIT ?
+                """, (rs, rowNum) -> new ElementRecord(
+                        rs.getString("element_id"),
+                        rs.getString("parent_element_id"),
+                        rs.getString("element_type"),
+                        rs.getInt("ordinal"),
+                        rs.getObject("page_from", Integer.class),
+                        rs.getObject("page_to", Integer.class),
+                        boundingBox(rs.getString("bbox")),
+                        rs.getString("text_content")),
+                documentId, version, afterOrdinal, limit);
+    }
+
     private List<String> stringList(String json) {
         try {
             return mapper.readValue(json, mapper.getTypeFactory()
@@ -230,4 +259,14 @@ public class DocumentStructureRepository {
             String semanticText,
             Integer pageNo,
             BoundingBox boundingBox) {}
+
+    public record ElementRecord(
+            String elementId,
+            String parentElementId,
+            String type,
+            int ordinal,
+            Integer pageFrom,
+            Integer pageTo,
+            BoundingBox boundingBox,
+            String text) {}
 }
