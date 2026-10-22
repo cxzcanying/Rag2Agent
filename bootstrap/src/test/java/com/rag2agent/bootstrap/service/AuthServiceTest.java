@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.rag2agent.bootstrap.config.RateLimitProperties;
+import com.rag2agent.bootstrap.config.TenantProperties;
 import com.rag2agent.bootstrap.dto.AuthDtos.LoginRequest;
 import com.rag2agent.bootstrap.entity.AppUser;
 import com.rag2agent.bootstrap.mapper.AppUserMapper;
@@ -39,7 +40,7 @@ class AuthServiceTest {
         when(users.selectOne(any())).thenReturn(null);
 
         BusinessException exception = assertThrows(BusinessException.class,
-                () -> new AuthService(users, encoder, redis, properties)
+                () -> new AuthService(users, encoder, redis, properties, new TenantProperties())
                         .login(new LoginRequest("alice", "bad")));
 
         assertEquals(ErrorCode.BAD_REQUEST, exception.errorCode());
@@ -61,7 +62,8 @@ class AuthServiceTest {
         when(users.selectOne(any())).thenReturn(null);
 
         BusinessException exception = assertThrows(BusinessException.class,
-                () -> new AuthService(users, encoder, redis, new RateLimitProperties())
+                () -> new AuthService(
+                        users, encoder, redis, new RateLimitProperties(), new TenantProperties())
                         .login(new LoginRequest("alice", "bad")));
 
         assertEquals(ErrorCode.BAD_REQUEST, exception.errorCode());
@@ -76,7 +78,8 @@ class AuthServiceTest {
 
         BusinessException exception = assertThrows(BusinessException.class,
                 () -> new AuthService(users, org.mockito.Mockito.mock(PasswordEncoder.class), redis,
-                        new RateLimitProperties()).login(new LoginRequest("alice", "bad")));
+                        new RateLimitProperties(), new TenantProperties())
+                        .login(new LoginRequest("alice", "bad")));
 
         assertEquals(ErrorCode.RATE_LIMITED, exception.errorCode());
         verify(users, never()).selectOne(any());
@@ -95,7 +98,8 @@ class AuthServiceTest {
         when(users.selectOne(any())).thenReturn(user);
         when(encoder.matches("good", "hash")).thenReturn(true);
 
-        assertThrows(RuntimeException.class, () -> new AuthService(users, encoder, redis, new RateLimitProperties())
+        assertThrows(RuntimeException.class, () -> new AuthService(
+                users, encoder, redis, new RateLimitProperties(), new TenantProperties())
                 .login(new LoginRequest("alice", "good")));
 
         verify(redis).delete("rag2agent:auth:failures:alice");

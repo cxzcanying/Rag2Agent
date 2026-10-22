@@ -15,6 +15,9 @@ public class KnowledgeBase {
     private String name;
     private String description;
     private Long ownerUserId;
+    private Long tenantId;
+    private Long orgId;
+    private String visibility;
     private Instant createdAt;
     private Instant updatedAt;
 }

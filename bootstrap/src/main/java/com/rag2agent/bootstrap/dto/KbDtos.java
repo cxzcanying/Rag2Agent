@@ -9,11 +9,37 @@ public final class KbDtos {
     private KbDtos() {}
 
     public record CreateKnowledgeBaseRequest(
-            @NotBlank(message = "知识库名称不能为空") String name, String description) {}
+            @NotBlank(message = "知识库名称不能为空") String name,
+            String description,
+            String visibility) {}
 
-    public record KnowledgeBaseView(Long id, String name, String description, Instant createdAt) {
+    public record KnowledgeBaseView(
+            Long id,
+            String name,
+            String description,
+            Long tenantId,
+            Long orgId,
+            String visibility,
+            Instant createdAt) {
+
         public static KnowledgeBaseView from(KnowledgeBase kb) {
-            return new KnowledgeBaseView(kb.getId(), kb.getName(), kb.getDescription(), kb.getCreatedAt());
+            return new KnowledgeBaseView(
+                    kb.getId(), kb.getName(), kb.getDescription(),
+                    kb.getTenantId(), kb.getOrgId(), kb.getVisibility(), kb.getCreatedAt());
         }
     }
+
+    public record GrantKnowledgeBaseMemberRequest(
+            @jakarta.validation.constraints.NotNull(message = "userId 不能为空") Long userId,
+            @NotBlank(message = "role 不能为空") String role) {}
+
+    public record UpdateKnowledgeBaseVisibilityRequest(
+            @NotBlank(message = "visibility 不能为空") String visibility) {}
+
+    public record KnowledgeBaseMemberView(
+            Long userId,
+            String username,
+            String nickname,
+            String role,
+            Instant createdAt) {}
 }

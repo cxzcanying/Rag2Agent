@@ -54,7 +54,7 @@ public class DocumentService {
         if (kbId == null || kbId <= 0) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "kbId 必须为正数");
         }
-        knowledgeBaseService.requireOwned(userId, kbId);
+        knowledgeBaseService.requireWritable(userId, kbId);
         if (file == null || file.isEmpty()) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "文件不能为空");
         }
@@ -102,7 +102,7 @@ public class DocumentService {
     }
 
     public List<DocumentView> listByKb(Long userId, Long kbId) {
-        knowledgeBaseService.requireOwned(userId, kbId);
+        knowledgeBaseService.requireReadable(userId, kbId);
         return documentMapper.selectList(
                         new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<DocumentMeta>()
                                 .eq(DocumentMeta::getKbId, kbId)
@@ -120,7 +120,7 @@ public class DocumentService {
         if (document == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "文档不存在");
         }
-        knowledgeBaseService.requireOwned(userId, document.getKbId());
+        knowledgeBaseService.requireReadable(userId, document.getKbId());
         return document;
     }
 
@@ -129,7 +129,7 @@ public class DocumentService {
         if (doc == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "文档不存在");
         }
-        knowledgeBaseService.requireOwned(userId, doc.getKbId());
+        knowledgeBaseService.requireReadable(userId, doc.getKbId());
         try {
             String url = storage.presignGet(doc.getStoragePath(), PRESIGN_EXPIRY_SECONDS);
             return new PresignResponse(url, PRESIGN_EXPIRY_SECONDS);
@@ -150,7 +150,7 @@ public class DocumentService {
         if (doc == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "文档不存在");
         }
-        knowledgeBaseService.requireOwned(userId, doc.getKbId());
+        knowledgeBaseService.requireWritable(userId, doc.getKbId());
         IngestTask task = ingestTaskService.latestByDocument(documentId);
         if (task == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "入库任务不存在");

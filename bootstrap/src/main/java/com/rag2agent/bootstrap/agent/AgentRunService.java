@@ -237,7 +237,7 @@ public class AgentRunService {
         if (kbId == null || kbId <= 0) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "kbId 必须为正数");
         }
-        knowledgeBaseService.requireOwned(userId, kbId);
+        knowledgeBaseService.requireReadable(userId, kbId);
         if (query == null || query.isBlank()) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "query 不能为空");
         }

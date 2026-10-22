@@ -34,7 +34,7 @@ public class AgentMemoryController {
             @RequestParam(defaultValue = "50") int limit) {
         Long userId = StpUtil.getLoginIdAsLong();
         if (kbId != null) {
-            knowledgeBaseService.requireOwned(userId, kbId);
+            knowledgeBaseService.requireReadable(userId, kbId);
         }
         return ApiResponse.success(memoryService.list(userId, kbId, limit));
     }

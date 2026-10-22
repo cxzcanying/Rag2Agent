@@ -43,7 +43,7 @@ public class DeleteDocumentTool implements Tool {
         if (document == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "文档不存在");
         }
-        knowledgeBaseService.requireOwned(userId, document.getKbId());
+        knowledgeBaseService.requireWritable(userId, document.getKbId());
     }
 
     @Override

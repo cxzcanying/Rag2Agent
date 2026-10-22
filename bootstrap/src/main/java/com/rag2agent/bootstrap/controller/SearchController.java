@@ -47,7 +47,7 @@ public class SearchController {
         if (kbId == null || kbId <= 0) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "kbId 不能为空");
         }
-        knowledgeBaseService.requireOwned(StpUtil.getLoginIdAsLong(), kbId);
+        knowledgeBaseService.requireReadable(StpUtil.getLoginIdAsLong(), kbId);
         if (query == null || query.isBlank()) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "query 不能为空");
         }

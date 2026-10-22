@@ -29,7 +29,7 @@ public class KnowledgeGraphController {
 
     @PostMapping("/communities/refresh")
     public ApiResponse<Integer> refresh(@PathVariable Long kbId) {
-        knowledgeBaseService.requireOwned(StpUtil.getLoginIdAsLong(), kbId);
+        knowledgeBaseService.requireWritable(StpUtil.getLoginIdAsLong(), kbId);
         return ApiResponse.success(communityService.refresh(kbId));
     }
 
@@ -37,7 +37,7 @@ public class KnowledgeGraphController {
     public ApiResponse<List<CommunitySummary>> communities(
             @PathVariable Long kbId,
             @RequestParam(defaultValue = "10") int limit) {
-        knowledgeBaseService.requireOwned(StpUtil.getLoginIdAsLong(), kbId);
+        knowledgeBaseService.requireReadable(StpUtil.getLoginIdAsLong(), kbId);
         return ApiResponse.success(communityService.globalSummaries(kbId, limit));
     }
 }

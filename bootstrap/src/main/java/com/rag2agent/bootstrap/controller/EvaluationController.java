@@ -46,7 +46,7 @@ public class EvaluationController {
      */
     @PostMapping("/cases/import")
     public ApiResponse<Integer> importCases(@RequestBody @Valid ImportCasesRequest request) {
-        knowledgeBaseService.requireOwned(StpUtil.getLoginIdAsLong(), request.kbId());
+        knowledgeBaseService.requireWritable(StpUtil.getLoginIdAsLong(), request.kbId());
         return ApiResponse.success(evaluationService.importCases(request.kbId(), request.cases()));
     }
 
@@ -62,7 +62,7 @@ public class EvaluationController {
             @RequestBody @Valid RunRequest request,
             //Idempotency-Key保证请求幂等，客户端生成UUID作为 Idempotency-Key 头的值
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        knowledgeBaseService.requireOwned(StpUtil.getLoginIdAsLong(), request.kbId());
+        knowledgeBaseService.requireWritable(StpUtil.getLoginIdAsLong(), request.kbId());
         return ApiResponse.success(evaluationService.submit(
                 request.kbId(), request.name(), request.config(), idempotencyKey));
     }
@@ -77,7 +77,7 @@ public class EvaluationController {
     public ApiResponse<List<RunSubmission>> matrix(
             @RequestBody @Valid MatrixRequest request,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        knowledgeBaseService.requireOwned(StpUtil.getLoginIdAsLong(), request.kbId());
+        knowledgeBaseService.requireWritable(StpUtil.getLoginIdAsLong(), request.kbId());
         return ApiResponse.success(evaluationService.submitMatrix(
                 request.kbId(), request.namePrefix(), request.configs(), idempotencyKey));
     }
@@ -92,7 +92,7 @@ public class EvaluationController {
         if (kbId == null || kbId <= 0) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "kbId 必须为正数");
         }
-        knowledgeBaseService.requireOwned(StpUtil.getLoginIdAsLong(), kbId);
+        knowledgeBaseService.requireReadable(StpUtil.getLoginIdAsLong(), kbId);
         return ApiResponse.success(evaluationService.listRuns(kbId));
     }
 
@@ -107,7 +107,7 @@ public class EvaluationController {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "runId 必须为正数");
         }
         RunStatus status = evaluationService.getRun(runId);
-        knowledgeBaseService.requireOwned(StpUtil.getLoginIdAsLong(), status.kbId());
+        knowledgeBaseService.requireReadable(StpUtil.getLoginIdAsLong(), status.kbId());
         return ApiResponse.success(status);
     }
 
@@ -117,7 +117,7 @@ public class EvaluationController {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "runId 必须为正数");
         }
         RunStatus status = evaluationService.getRun(runId);
-        knowledgeBaseService.requireOwned(StpUtil.getLoginIdAsLong(), status.kbId());
+        knowledgeBaseService.requireReadable(StpUtil.getLoginIdAsLong(), status.kbId());
         return ApiResponse.success(evaluationService.listResults(runId));
     }
 
@@ -127,7 +127,7 @@ public class EvaluationController {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "runId 必须为正数");
         }
         RunStatus status = evaluationService.getRun(runId);
-        knowledgeBaseService.requireOwned(StpUtil.getLoginIdAsLong(), status.kbId());
+        knowledgeBaseService.requireWritable(StpUtil.getLoginIdAsLong(), status.kbId());
         evaluationService.cancel(runId);
         return ApiResponse.success(null);
     }

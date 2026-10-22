@@ -33,7 +33,7 @@ public class MultiModalSearchService {
             byte[] image,
             String imageContentType,
             int topK) {
-        knowledgeBaseService.requireOwned(userId, kbId);
+        knowledgeBaseService.requireReadable(userId, kbId);
         if (topK < 1 || topK > 100) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "topK 必须在 1~100 之间");
         }

@@ -19,6 +19,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
     , McpRemoteProperties.class
     , RecoveryProperties.class
     , Neo4jGraphProperties.class
+    , TenantProperties.class
 })
 public class BootstrapConfiguration {
 

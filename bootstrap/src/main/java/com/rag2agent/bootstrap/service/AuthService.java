@@ -9,6 +9,7 @@ import com.rag2agent.bootstrap.dto.AuthDtos.UserView;
 import com.rag2agent.bootstrap.entity.AppUser;
 import com.rag2agent.bootstrap.mapper.AppUserMapper;
 import com.rag2agent.bootstrap.config.RateLimitProperties;
+import com.rag2agent.bootstrap.config.TenantProperties;
 import com.rag2agent.framework.common.ErrorCode;
 import com.rag2agent.framework.exception.BusinessException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -29,17 +30,20 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final StringRedisTemplate redis;
     private final RateLimitProperties rateLimitProperties;
+    private final TenantProperties tenantProperties;
     private static final DefaultRedisScript<Long> LOGIN_FAILURE_SCRIPT = new DefaultRedisScript<>(
             "local count = redis.call('INCR', KEYS[1]) "
                     + "if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end "
                     + "return count", Long.class);
 
     public AuthService(AppUserMapper userMapper, PasswordEncoder passwordEncoder,
-            StringRedisTemplate redis, RateLimitProperties rateLimitProperties) {
+            StringRedisTemplate redis, RateLimitProperties rateLimitProperties,
+            TenantProperties tenantProperties) {
         this.userMapper = userMapper;
         this.passwordEncoder = passwordEncoder;
         this.redis = redis;
         this.rateLimitProperties = rateLimitProperties;
+        this.tenantProperties = tenantProperties;
     }
 
     public UserView register(RegisterRequest request) {
@@ -52,6 +56,8 @@ public class AuthService {
         user.setUsername(request.username());
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setNickname(StringUtils.hasText(request.nickname()) ? request.nickname() : request.username());
+        user.setTenantId(tenantProperties.getDefaultTenantId());
+        user.setOrgId(tenantProperties.getDefaultOrganizationId());
         try {
             userMapper.insert(user);
         } catch (DuplicateKeyException e) {

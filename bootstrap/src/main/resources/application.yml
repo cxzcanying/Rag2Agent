@@ -66,6 +66,9 @@ sa-token:
   is-log: false
 
 rag2agent:
+  tenancy:
+    default-tenant-id: ${RAG2AGENT_DEFAULT_TENANT_ID:1}
+    default-organization-id: ${RAG2AGENT_DEFAULT_ORGANIZATION_ID:1}
   recovery:
     enabled: ${RAG2AGENT_RECOVERY_ENABLED:true}
     scan-interval-ms: ${RAG2AGENT_RECOVERY_SCAN_INTERVAL_MS:60000}

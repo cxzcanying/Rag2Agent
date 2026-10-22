@@ -73,7 +73,7 @@ public class MultiAgentResearchService {
     }
 
     public TeamResearchResponse research(Long userId, TeamResearchRequest request) {
-        knowledgeBaseService.requireOwned(userId, request.kbId());
+        knowledgeBaseService.requireReadable(userId, request.kbId());
         int analystWorkers = agentProperties.getTeamAnalystWorkers();
         if (analystWorkers < 2 || analystWorkers > 4) {
             throw new IllegalArgumentException("teamAnalystWorkers 必须在 2~4 之间");

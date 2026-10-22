@@ -33,7 +33,7 @@ public class SearchKnowledgeGraphTool implements Tool {
 
     @Override
     public void validateAccess(Long userId, Map<String, Object> arguments) {
-        knowledgeBaseService.requireOwned(userId, ((Number) arguments.get("kb_id")).longValue());
+        knowledgeBaseService.requireReadable(userId, ((Number) arguments.get("kb_id")).longValue());
     }
 
     @Override

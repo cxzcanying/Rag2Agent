@@ -22,9 +22,18 @@ public final class AuthDtos {
 
     public record LoginResponse(String token, UserView user) {}
 
-    public record UserView(Long id, String username, String nickname, Instant createdAt) {
+    public record UserView(
+            Long id,
+            String username,
+            String nickname,
+            Long tenantId,
+            Long orgId,
+            Instant createdAt) {
+
         public static UserView from(AppUser user) {
-            return new UserView(user.getId(), user.getUsername(), user.getNickname(), user.getCreatedAt());
+            return new UserView(
+                    user.getId(), user.getUsername(), user.getNickname(),
+                    user.getTenantId(), user.getOrgId(), user.getCreatedAt());
         }
     }
 }

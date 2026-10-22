@@ -29,7 +29,7 @@ public class SearchAgentMemoryTool implements Tool {
     @Override
     public void validateAccess(Long userId, Map<String, Object> arguments) {
         if (arguments.get("kb_id") != null) {
-            knowledgeBaseService.requireOwned(userId, ((Number) arguments.get("kb_id")).longValue());
+            knowledgeBaseService.requireReadable(userId, ((Number) arguments.get("kb_id")).longValue());
         }
     }
 

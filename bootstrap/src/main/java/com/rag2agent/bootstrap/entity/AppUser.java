@@ -15,6 +15,8 @@ public class AppUser {
     private String username;
     private String passwordHash;
     private String nickname;
+    private Long tenantId;
+    private Long orgId;
     private Instant createdAt;
     private Instant updatedAt;
 }
