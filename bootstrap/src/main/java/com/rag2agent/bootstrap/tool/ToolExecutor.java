@@ -87,7 +87,7 @@ public class ToolExecutor {
             future = taskExecutor.submit(() -> Observation.createNotStarted(
                             "rag2agent.agent.tool", observationRegistry)
                     .lowCardinalityKeyValue("tool", toolName)
-                    .observe(() -> tool.execute(arguments)));
+                    .observe(() -> tool.execute(userId, arguments)));
             String output = future.get(properties.getToolTimeoutMillis(), TimeUnit.MILLISECONDS);
             record.setStatus("SUCCEEDED");
             record.setOutput(toJson(limitAuditOutput(output)));

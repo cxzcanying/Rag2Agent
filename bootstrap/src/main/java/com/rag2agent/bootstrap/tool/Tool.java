@@ -13,4 +13,9 @@ public interface Tool {
     default void validateAccess(Long userId, Map<String, Object> arguments) {}
 
     String execute(Map<String, Object> arguments);
+
+    /** 需要用户上下文的后台执行入口；默认保持既有工具契约。 */
+    default String execute(Long userId, Map<String, Object> arguments) {
+        return execute(arguments);
+    }
 }
