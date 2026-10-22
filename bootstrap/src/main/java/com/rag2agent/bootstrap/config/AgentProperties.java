@@ -20,5 +20,7 @@ public class AgentProperties {
     private int maxToolCalls = 20;
     /** 审批挂起超过该秒数后由后台自动置为终态，避免一直积压 WAITING_APPROVAL。 */
     private long approvalTimeoutSeconds = 30 * 60;
+    /** off/auto/minimal/low/medium/high/max；auto 按问题复杂度选择。 */
+    private String reasoningEffort = "off";
 
 }

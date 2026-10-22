@@ -97,6 +97,7 @@ rag2agent:
     tool-timeout-millis: ${RAG2AGENT_TOOL_TIMEOUT_MILLIS:10000}
     max-tool-calls: ${RAG2AGENT_MAX_TOOL_CALLS:20}
     approval-timeout-seconds: ${RAG2AGENT_APPROVAL_TIMEOUT_SECONDS:1800}
+    reasoning-effort: ${RAG2AGENT_REASONING_EFFORT:off}
   application:
     name: RAG2Agent
     version: 0.1.0-SNAPSHOT

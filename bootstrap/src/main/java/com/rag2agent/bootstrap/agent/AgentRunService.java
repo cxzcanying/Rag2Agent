@@ -386,6 +386,7 @@ public class AgentRunService {
 
         // 全局工具调用计数：防止单轮多个工具或跨轮反复调用同一工具把资源耗光。
         int totalToolCalls = 0;
+        String reasoningEffort = resolveReasoningEffort(messages);
         for (int iteration = 0; iteration < maxIterations; iteration++) {
             int estimatedTokens = contextCompactor.estimateTokens(messages);
             if (estimatedTokens > agentProperties.getContextTokenBudget()) {
@@ -422,10 +423,10 @@ public class AgentRunService {
                         .lowCardinalityKeyValue("model", chatClient.modelName())
                         .observe(() -> chatClient.complete(new ChatCompletionRequest(
                                 chatClient.providerName(), null, requestMessages,
-                                Map.of("max_tokens", agentProperties.getMaxOutputTokens()),
+                                requestOptions(reasoningEffort),
                                 toolRegistry.toolDefs())));
             } catch (Exception e) {
-                recordLlmMetric(startMs, "error");
+                recordLlmMetric(startMs, "error", reasoningEffort);
                 log.error("Agent LLM 调用失败: runId={}", runId, e);
                 // 新增DEGRADED状态用于表示 LLM 调用失败但已经有检索引用时，使得可用性更高，不再把整个 Agent 任务判定为失败
                 if (e instanceof AiClientException && !references.isEmpty()) {
@@ -441,12 +442,13 @@ public class AgentRunService {
                 onEvent.accept(new AgentEvent("error", safeAiError(e)));
                 return new AgentExecutionResult(runId, "FAILED", null, references, null);
             }
-            recordLlmMetric(startMs, "success");
+            recordLlmMetric(startMs, "success", reasoningEffort);
             if (response != null) {
                 recordTokens(response.usage(), requestMessages, toolRegistry.toolDefs(),
                         chatClient.providerName(), chatClient.modelName());
             }
-            recordLlmStep(runId, iteration, response, System.currentTimeMillis() - startMs);
+            recordLlmStep(
+                    runId, iteration, response, System.currentTimeMillis() - startMs, reasoningEffort);
 
             if (response.toolCalls() != null && !response.toolCalls().isEmpty()) {
                 for (ToolCall toolCall : response.toolCalls()) {
@@ -507,6 +509,7 @@ public class AgentRunService {
             int maxIterations,
             Consumer<AgentEvent> onEvent) {
         updateStatus(runId, "FINALIZING");
+        String reasoningEffort = resolveReasoningEffort(messages);
         List<ChatMessage> finalMessages = new ArrayList<>(messages);
         finalMessages.add(new ChatMessage(
                 "user",
@@ -524,13 +527,18 @@ public class AgentRunService {
                             chatClient.providerName(),
                             null,
                             finalMessages,
-                            Map.of("max_tokens", agentProperties.getMaxOutputTokens()))));
+                            requestOptions(reasoningEffort))));
             if (response == null || response.content() == null || response.content().isBlank()) {
                 throw new IllegalStateException("最大步数总结未返回有效答案");
             }
-            recordLlmMetric(startMs, "success");
+            recordLlmMetric(startMs, "success", reasoningEffort);
             recordTokens(response.usage(), finalMessages, List.of(), chatClient.providerName(), chatClient.modelName());
-            recordLlmStep(runId, maxIterations + 1, response, System.currentTimeMillis() - startMs);
+            recordLlmStep(
+                    runId,
+                    maxIterations + 1,
+                    response,
+                    System.currentTimeMillis() - startMs,
+                    reasoningEffort);
             String answer = response.content().trim();
             updateAnswerAndStatus(runId, "MAX_STEPS_REACHED", answer);
             recordAgentTransition("max_steps_reached");
@@ -540,7 +548,7 @@ public class AgentRunService {
                     "maxStepsReached", true)));
             return new AgentExecutionResult(runId, "MAX_STEPS_REACHED", answer, references, null);
         } catch (Exception exception) {
-            recordLlmMetric(startMs, "error");
+            recordLlmMetric(startMs, "error", reasoningEffort);
             log.error("Agent 最大步数总结失败: runId={}", runId, exception);
             updateStatus(runId, "FAILED");
             recordAgentTransition("failed");
@@ -594,7 +602,12 @@ public class AgentRunService {
         return sb.toString();
     }
 
-    private void recordLlmStep(Long runId, int seq, ChatCompletionResponse response, long durationMs) {
+    private void recordLlmStep(
+            Long runId,
+            int seq,
+            ChatCompletionResponse response,
+            long durationMs,
+            String reasoningEffort) {
         AgentStep step = new AgentStep();
         step.setRunId(runId);
         step.setSeq(seq + 1);
@@ -602,6 +615,7 @@ public class AgentRunService {
         step.setStatus("SUCCEEDED");
         step.setOutput(toJson(Map.of(
                 "finishReason", response.finishReason() == null ? "" : response.finishReason(),
+                "reasoningEffort", reasoningEffort,
                 "toolCallCount", response.toolCalls() == null ? 0 : response.toolCalls().size())));
         step.setDurationMs((int) durationMs);
         stepMapper.insert(step);
@@ -695,9 +709,10 @@ public class AgentRunService {
         }
     }
 
-    private void recordLlmMetric(long startedMs, String outcome) {
+    private void recordLlmMetric(long startedMs, String outcome, String reasoningEffort) {
         Timer.builder("rag2agent.ai.chat.duration")
                 .tag("outcome", outcome)
+                .tag("reasoning_effort", reasoningEffort)
                 .publishPercentileHistogram()
                 .register(meterRegistry)
                 .record(Duration.ofMillis(System.currentTimeMillis() - startedMs));
@@ -755,6 +770,25 @@ public class AgentRunService {
                 .tag("status", status)
                 .register(meterRegistry)
                 .increment();
+    }
+
+    private String resolveReasoningEffort(List<ChatMessage> messages) {
+        String query = messages.stream()
+                .filter(message -> "user".equals(message.role()))
+                .map(ChatMessage::content)
+                .filter(content -> content != null && !content.isBlank())
+                .findFirst()
+                .orElse("");
+        return ReasoningModeRouter.resolve(agentProperties.getReasoningEffort(), query);
+    }
+
+    private Map<String, Object> requestOptions(String reasoningEffort) {
+        if ("off".equals(reasoningEffort)) {
+            return Map.of("max_tokens", agentProperties.getMaxOutputTokens());
+        }
+        return Map.of(
+                "max_tokens", agentProperties.getMaxOutputTokens(),
+                "reasoning_effort", reasoningEffort);
     }
 
     private String safeAiError(Exception exception) {
