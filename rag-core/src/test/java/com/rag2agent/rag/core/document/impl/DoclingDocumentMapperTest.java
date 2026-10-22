@@ -78,4 +78,52 @@ class DoclingDocumentMapperTest {
         assertEquals("docling", result.metadata().get("parser"));
         assertTrue(result.text().contains("收入表"));
     }
+
+    @Test
+    void mergesAdjacentTablesWithSameHeadersAndKeepsPhysicalPages() throws Exception {
+        JsonNode document = mapper.readTree("""
+                {
+                  "schema_name": "DoclingDocument",
+                  "version": "1.0",
+                  "body": {"children": [
+                    {"$ref": "#/tables/0"},
+                    {"$ref": "#/tables/1"}
+                  ]},
+                  "texts": [],
+                  "pictures": [],
+                  "tables": [
+                    {
+                      "self_ref": "#/tables/0",
+                      "prov": [{"page_no": 2}],
+                      "data": {"table_cells": [
+                        {"text": "项目", "start_row_offset_idx": 0, "start_col_offset_idx": 0, "column_header": true},
+                        {"text": "金额", "start_row_offset_idx": 0, "start_col_offset_idx": 1, "column_header": true},
+                        {"text": "收入", "start_row_offset_idx": 1, "start_col_offset_idx": 0},
+                        {"text": "100", "start_row_offset_idx": 1, "start_col_offset_idx": 1}
+                      ]}
+                    },
+                    {
+                      "self_ref": "#/tables/1",
+                      "prov": [{"page_no": 3}],
+                      "data": {"table_cells": [
+                        {"text": "项目", "start_row_offset_idx": 0, "start_col_offset_idx": 0, "column_header": true},
+                        {"text": "金额", "start_row_offset_idx": 0, "start_col_offset_idx": 1, "column_header": true},
+                        {"text": "成本", "start_row_offset_idx": 1, "start_col_offset_idx": 0},
+                        {"text": "60", "start_row_offset_idx": 1, "start_col_offset_idx": 1}
+                      ]}
+                    }
+                  ],
+                  "pages": {"2": {"page_no": 2}, "3": {"page_no": 3}}
+                }
+                """);
+
+        StructuredDocument result = new DoclingDocumentMapper().map("doc-1", document, "");
+
+        assertEquals(1, result.tables().size());
+        assertEquals(2, result.tables().getFirst().pageFrom());
+        assertEquals(3, result.tables().getFirst().pageTo());
+        assertEquals(2, result.tables().getFirst().rows().size());
+        assertEquals(2, result.tables().getFirst().rows().get(0).page());
+        assertEquals(3, result.tables().getFirst().rows().get(1).page());
+    }
 }

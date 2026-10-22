@@ -73,6 +73,7 @@ public final class DoclingDocumentMapper {
                     metadata(item)));
             appendPageText(pageText, page, content);
         }
+        tables = mergeTableContinuations(tables);
 
         List<String> pages = pageText.entrySet().stream()
                 .map(entry -> entry.getValue().toString().trim())
@@ -213,6 +214,54 @@ public final class DoclingDocumentMapper {
             markdown.append("| ").append(String.join(" | ", row.cells())).append(" |\n");
         }
         return markdown.toString();
+    }
+
+    private static List<Table> mergeTableContinuations(List<Table> tables) {
+        List<Table> merged = new ArrayList<>();
+        for (Table current : tables) {
+            if (!merged.isEmpty()) {
+                Table previous = merged.getLast();
+                if (isContinuation(previous, current)) {
+                    merged.set(merged.size() - 1, merge(previous, current));
+                    continue;
+                }
+            }
+            merged.add(current);
+        }
+        return merged;
+    }
+
+    private static boolean isContinuation(Table previous, Table current) {
+        if (previous.headers() == null || !previous.headers().equals(current.headers())) {
+            return false;
+        }
+        if (current.title() != null && !current.title().isBlank()
+                && !current.title().equals(previous.title())) {
+            return false;
+        }
+        return previous.pageTo() != null
+                && current.pageFrom() != null
+                && current.pageFrom() == previous.pageTo() + 1;
+    }
+
+    private static Table merge(Table previous, Table current) {
+        List<Row> sourceRows = new ArrayList<>(previous.rows());
+        sourceRows.addAll(current.rows());
+        List<Row> rows = new ArrayList<>();
+        for (int index = 0; index < sourceRows.size(); index++) {
+            Row row = sourceRows.get(index);
+            rows.add(new Row(
+                    row.id(), index, row.cells(), row.semanticText(), row.page(), row.boundingBox()));
+        }
+        return new Table(
+                previous.id(),
+                previous.title(),
+                previous.headers(),
+                rows,
+                previous.pageFrom(),
+                current.pageTo(),
+                previous.boundingBox(),
+                previous.markdown() + "\n" + current.markdown());
     }
 
     private static List<TableCell> tableCells(JsonNode cells) {
