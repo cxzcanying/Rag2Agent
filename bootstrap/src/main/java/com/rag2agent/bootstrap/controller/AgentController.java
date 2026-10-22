@@ -6,6 +6,7 @@ import com.rag2agent.bootstrap.agent.AgentEvent;
 import com.rag2agent.bootstrap.agent.AgentExecutionResult;
 import com.rag2agent.bootstrap.agent.AgentEventStore;
 import com.rag2agent.bootstrap.agent.AgentRunService;
+import com.rag2agent.bootstrap.agent.AgentTaskService;
 import com.rag2agent.bootstrap.dto.AgentDtos.ApprovalRequest;
 import com.rag2agent.bootstrap.dto.AgentDtos.ChatRequest;
 import com.rag2agent.bootstrap.dto.AgentDtos.PersistedAgentEvent;
@@ -45,14 +46,18 @@ public class AgentController {
     private final Tracer tracer;
     private final AgentEventReplayStore eventStore;
     private final AgentEventStore durableEventStore;
+    private final AgentTaskService taskService;
 
     public AgentController(AgentRunService agentRunService, ObjectMapper objectMapper, Tracer tracer,
-            AgentEventReplayStore eventStore, AgentEventStore durableEventStore) {
+            AgentEventReplayStore eventStore,
+            AgentEventStore durableEventStore,
+            AgentTaskService taskService) {
         this.agentRunService = agentRunService;
         this.objectMapper = objectMapper;
         this.tracer = tracer;
         this.eventStore = eventStore;
         this.durableEventStore = durableEventStore;
+        this.taskService = taskService;
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -187,6 +192,12 @@ public class AgentController {
                 throw new IllegalStateException("Agent 事件 JSON 解析失败", exception);
             }
         }).toList());
+    }
+
+    @GetMapping("/agent/runs/{runId}/tasks")
+    public ApiResponse<java.util.List<AgentTaskService.AgentTask>> tasks(@PathVariable Long runId) {
+        agentRunService.getRun(StpUtil.getLoginIdAsLong(), runId);
+        return ApiResponse.success(taskService.list(runId));
     }
 
     private void sendEvent(PrintWriter writer, AgentEvent event) {
