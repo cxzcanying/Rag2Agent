@@ -557,7 +557,8 @@ public class AgentRunService {
                 .map(result -> new Reference(
                         ((Number) result.metadata().getOrDefault("documentId", 0)).longValue(),
                         (Integer) result.metadata().getOrDefault("chunkIndex", 0),
-                        result.content()))
+                        result.content(),
+                        result.metadata()))
                 .toList();
         onEvent.accept(new AgentEvent("reference", references));
 

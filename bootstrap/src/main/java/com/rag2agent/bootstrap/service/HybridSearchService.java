@@ -1,5 +1,8 @@
 package com.rag2agent.bootstrap.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.config.RetrievalProperties;
 import com.rag2agent.framework.common.ErrorCode;
 import com.rag2agent.framework.exception.BusinessException;
@@ -21,6 +24,7 @@ import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import java.util.Comparator;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -55,6 +59,7 @@ public class HybridSearchService {
     private final Executor retrievalTaskExecutor;
     private final QueryEmbeddingCache queryEmbeddingCache;
     private final RetrievalProperties retrievalProperties;
+    private final ObjectMapper objectMapper;
 
     /**
      * 三个依赖的分工：
@@ -69,7 +74,8 @@ public class HybridSearchService {
             ObservationRegistry observationRegistry,
             @Qualifier("retrievalTaskExecutor") Executor retrievalTaskExecutor,
             QueryEmbeddingCache queryEmbeddingCache,
-            RetrievalProperties retrievalProperties) {
+            RetrievalProperties retrievalProperties,
+            ObjectMapper objectMapper) {
         this.jdbc = jdbc;
         this.embeddingClient = embeddingClient;
         this.rerankClient = rerankClient;
@@ -78,6 +84,7 @@ public class HybridSearchService {
         this.retrievalTaskExecutor = retrievalTaskExecutor;
         this.queryEmbeddingCache = queryEmbeddingCache;
         this.retrievalProperties = retrievalProperties;
+        this.objectMapper = objectMapper;
     }
 
     public List<RetrievalResult> search(Long kbId, String query, int topK) {
@@ -254,6 +261,7 @@ public class HybridSearchService {
         return jdbc.query(
                 """
                 SELECT c.id, c.content, c.document_id, c.chunk_index,
+                       CAST(c.metadata AS text) AS metadata,
                        1 - (c.embedding <=> CAST(? AS vector)) AS score
                 FROM document_chunk c
                 JOIN document d ON d.id = c.document_id
@@ -261,13 +269,7 @@ public class HybridSearchService {
                 ORDER BY c.embedding <=> CAST(? AS vector)
                 LIMIT ?
                 """,
-                (rs, rowNum) -> new RetrievalResult(
-                        rs.getString("id"),
-                        rs.getString("content"),
-                        rs.getDouble("score"),
-                        Map.of(
-                                "documentId", rs.getLong("document_id"),
-                        "chunkIndex", rs.getInt("chunk_index"))),
+                (rs, rowNum) -> retrievalResult(rs),
                 vectorLiteral, kbId, vectorLiteral, topK);
     }
 
@@ -306,6 +308,7 @@ public class HybridSearchService {
             args.add(topK);
             String sql = """
                     SELECT c.id, c.content, c.document_id, c.chunk_index,
+                           CAST(c.metadata AS text) AS metadata,
                            ((%s) / ?)::double precision AS score
                     FROM document_chunk c
                     JOIN document d ON d.id = c.document_id
@@ -314,9 +317,7 @@ public class HybridSearchService {
                     ORDER BY score DESC
                     LIMIT ?
                     """.formatted(score, predicates);
-            return jdbc.query(sql, (rs, rowNum) -> new RetrievalResult(
-                    rs.getString("id"), rs.getString("content"), rs.getDouble("score"),
-                    Map.of("documentId", rs.getLong("document_id"), "chunkIndex", rs.getInt("chunk_index"))),
+            return jdbc.query(sql, (rs, rowNum) -> retrievalResult(rs),
                     args.toArray());
         }
         //ILIKE '%query%'精确包含
@@ -324,6 +325,7 @@ public class HybridSearchService {
         return jdbc.query(
                 """
                 SELECT c.id, c.content, c.document_id, c.chunk_index,
+                       CAST(c.metadata AS text) AS metadata,
                        similarity(c.content, ?) AS score
                 FROM document_chunk c
                 JOIN document d ON d.id = c.document_id
@@ -332,13 +334,7 @@ public class HybridSearchService {
                 ORDER BY score DESC
                 LIMIT ?
                 """,
-                (rs, rowNum) -> new RetrievalResult(
-                        rs.getString("id"),
-                        rs.getString("content"),
-                        rs.getDouble("score"),
-                        Map.of(
-                                "documentId", rs.getLong("document_id"),
-                        "chunkIndex", rs.getInt("chunk_index"))),
+                (rs, rowNum) -> retrievalResult(rs),
                 query, kbId, escapeLike(query), query, topK);
     }
 
@@ -346,6 +342,7 @@ public class HybridSearchService {
         return jdbc.query(
                 """
                 SELECT c.id, c.content, c.document_id, c.chunk_index,
+                       CAST(c.metadata AS text) AS metadata,
                        CASE WHEN c.content ILIKE '%' || ? || '%' THEN 1.0 ELSE 0.0 END
                             + COALESCE(ts_rank_cd(c.content_zh_tsv, plainto_tsquery('rag2agent_zhcfg', ?)), 0) AS score
                 FROM document_chunk c
@@ -357,9 +354,7 @@ public class HybridSearchService {
                          score DESC
                 LIMIT ?
                 """,
-                (rs, rowNum) -> new RetrievalResult(
-                        rs.getString("id"), rs.getString("content"), rs.getDouble("score"),
-                        Map.of("documentId", rs.getLong("document_id"), "chunkIndex", rs.getInt("chunk_index"))),
+                (rs, rowNum) -> retrievalResult(rs),
                 escapeLike(query), query, kbId, escapeLike(query), query, escapeLike(query), topK);
     }
 
@@ -435,5 +430,22 @@ public class HybridSearchService {
      */
     private static String escapeLike(String value) {
         return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+    }
+
+    private RetrievalResult retrievalResult(java.sql.ResultSet rs) throws java.sql.SQLException {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("documentId", rs.getLong("document_id"));
+        metadata.put("chunkIndex", rs.getInt("chunk_index"));
+        String stored = rs.getString("metadata");
+        if (stored != null && !stored.isBlank()) {
+            try {
+                metadata.putAll(objectMapper.readValue(
+                        stored, new TypeReference<Map<String, Object>>() {}));
+            } catch (JsonProcessingException exception) {
+                throw new IllegalStateException("chunk metadata JSON 解析失败", exception);
+            }
+        }
+        return new RetrievalResult(
+                rs.getString("id"), rs.getString("content"), rs.getDouble("score"), metadata);
     }
 }

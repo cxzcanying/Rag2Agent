@@ -18,6 +18,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -296,7 +298,7 @@ public class IngestPipelineService {
                         chunk.content().length(),
                         toVectorString(vectors.get(i)),
                         pageNumber,
-                        toJson(chunk.metadata()),
+                        toJson(chunkMetadata(chunk, document, version)),
                         version));
             }
             chunkMapper.insertChunks(rows);
@@ -332,5 +334,16 @@ public class IngestPipelineService {
         } catch (JsonProcessingException exception) {
             throw new IllegalArgumentException("chunk metadata 序列化失败", exception);
         }
+    }
+
+    private Map<String, Object> chunkMetadata(
+            TextChunk chunk, DocumentMeta document, int version) {
+        Map<String, Object> metadata = new LinkedHashMap<>(chunk.metadata());
+        metadata.putIfAbsent("documentId", document.getId());
+        metadata.putIfAbsent("kbId", document.getKbId());
+        metadata.put("version", version);
+        metadata.putIfAbsent("contentType",
+                chunk.metadata().containsKey("tableId") ? "table_row" : "text");
+        return metadata;
     }
 }
