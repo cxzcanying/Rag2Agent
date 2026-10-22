@@ -1,5 +1,7 @@
 # 开发计划（第一期：可演示闭环）
 
+> 后续企业级多模态 Agent 升级计划见 [enterprise-agent-upgrade-plan.md](enterprise-agent-upgrade-plan.md)。
+
 > 依据：[docs/tech-selection.md](tech-selection.md) 第 7 节"第一期"范围。周期：2 周（14 天，含缓冲）。目标：本地 `docker compose up` 后，能完成"上传 PDF → 自动入库 → 混合检索问答（带引用）→ Agent 工具调用（含人工审批）"的完整演示闭环，评测集能跑出指标。
 >
 > 标注说明：

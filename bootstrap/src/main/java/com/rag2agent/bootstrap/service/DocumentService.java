@@ -8,6 +8,7 @@ import com.rag2agent.bootstrap.mapper.DocumentMetaMapper;
 import com.rag2agent.bootstrap.storage.MinioStorageService;
 import com.rag2agent.framework.common.ErrorCode;
 import com.rag2agent.framework.exception.BusinessException;
+import com.rag2agent.infra.ai.config.DoclingProperties;
 import java.io.InputStream;
 import java.time.LocalDate;
 import java.util.List;
@@ -21,7 +22,9 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 public class DocumentService {
 
-    private static final Set<String> ALLOWED_EXTENSIONS = Set.of("pdf");
+    private static final Set<String> ALLOWED_EXTENSIONS = Set.of(
+            "pdf", "docx", "pptx", "xlsx", "html", "htm",
+            "png", "jpg", "jpeg", "tif", "tiff", "eml", "msg");
     private static final long MAX_SIZE = 50L * 1024 * 1024;
     private static final int PRESIGN_EXPIRY_SECONDS = 600;
 
@@ -30,18 +33,21 @@ public class DocumentService {
     private final IngestTaskService ingestTaskService;
     private final IngestMessageService ingestMessageService;
     private final KnowledgeBaseService knowledgeBaseService;
+    private final DoclingProperties doclingProperties;
 
     public DocumentService(
             DocumentMetaMapper documentMapper,
             MinioStorageService storage,
             IngestTaskService ingestTaskService,
             IngestMessageService ingestMessageService,
-            KnowledgeBaseService knowledgeBaseService) {
+            KnowledgeBaseService knowledgeBaseService,
+            DoclingProperties doclingProperties) {
         this.documentMapper = documentMapper;
         this.storage = storage;
         this.ingestTaskService = ingestTaskService;
         this.ingestMessageService = ingestMessageService;
         this.knowledgeBaseService = knowledgeBaseService;
+        this.doclingProperties = doclingProperties;
     }
 
     public DocumentView upload(Long userId, Long kbId, MultipartFile file) {
@@ -58,7 +64,12 @@ public class DocumentService {
         String fileName = StringUtils.cleanPath(file.getOriginalFilename() == null ? "unnamed" : file.getOriginalFilename());
         String ext = extensionOf(fileName);
         if (!ALLOWED_EXTENSIONS.contains(ext)) {
-            throw new BusinessException(ErrorCode.BAD_REQUEST, "当前仅支持 PDF 文件");
+            throw new BusinessException(ErrorCode.BAD_REQUEST,
+                    "支持的文档类型: PDF、DOCX、PPTX、XLSX、HTML、图片和邮件");
+        }
+        if (!doclingProperties.isEnabled() && !"pdf".equals(ext)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST,
+                    "当前仅启用 PDF 解析；其他格式需要开启 Docling 文档智能服务");
         }
 
         String objectKey =

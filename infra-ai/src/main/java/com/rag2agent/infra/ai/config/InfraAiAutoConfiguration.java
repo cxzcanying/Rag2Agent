@@ -1,9 +1,11 @@
 package com.rag2agent.infra.ai.config;
 
 import com.rag2agent.infra.ai.client.ChatModelClient;
+import com.rag2agent.infra.ai.client.DocumentIntelligenceClient;
 import com.rag2agent.infra.ai.client.EmbeddingClient;
 import com.rag2agent.infra.ai.client.RerankClient;
 import com.rag2agent.infra.ai.client.impl.OpenAiChatModelClient;
+import com.rag2agent.infra.ai.client.impl.DoclingClient;
 import com.rag2agent.infra.ai.client.impl.OpenAiEmbeddingClient;
 import com.rag2agent.infra.ai.client.impl.OpenAiRerankClient;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -18,7 +20,11 @@ import io.micrometer.core.instrument.MeterRegistry;
  * @author 21311
  */
 @Configuration
-@EnableConfigurationProperties({AiProviderProperties.class, AiResilienceProperties.class})
+@EnableConfigurationProperties({
+    AiProviderProperties.class,
+    AiResilienceProperties.class,
+    DoclingProperties.class
+})
 public class InfraAiAutoConfiguration {
 
     @Bean
@@ -43,5 +49,13 @@ public class InfraAiAutoConfiguration {
     public RerankClient rerankClient(
             AiProviderRegistry providers, AiResilienceProperties resilience, MeterRegistry meterRegistry) {
         return new OpenAiRerankClient(providers.active("rerank"), resilience, meterRegistry);
+    }
+
+    @Bean
+    public DocumentIntelligenceClient documentIntelligenceClient(
+            DoclingProperties properties,
+            AiResilienceProperties resilience,
+            MeterRegistry meterRegistry) {
+        return new DoclingClient(properties, resilience, meterRegistry);
     }
 }

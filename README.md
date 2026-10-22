@@ -31,7 +31,7 @@
 | 领域 | 已实现 |
 | --- | --- |
 | 账号与权限 | 注册、登录、Sa-Token 会话；知识库 owner 校验覆盖文档、检索、Agent 工具、评测和审批入口 |
-| 文档入库 | PDF 上传到 MinIO；RocketMQ 异步处理；PDF 解析、递归切块、Embedding（批量 + 片段级缓存复用未变切片）、当前版本 chunk 写入 PostgreSQL/pgvector；启动/周期扫描自动恢复非终态中断任务 |
+| 文档入库 | 文件上传到 MinIO；RocketMQ 异步处理；默认使用 PDFBox 解析 PDF，启用 Docling 后支持 DOCX、PPTX、XLSX、HTML、图片和邮件，并持久化文档元素、逻辑表格、表格行与资产；递归切块、Embedding（批量 + 片段级缓存）、版本化写入 PostgreSQL/pgvector；启动/周期扫描自动恢复非终态中断任务 |
 | 检索 | Query Routing；向量检索与 `pg_trgm` 关键词检索并行；RRF 融合；可选 Rerank；返回引用来源 |
 | Agent | OpenAI-compatible function calling；工具 schema/权限/审计/超时；写操作审批；SSE 对话；上下文压缩；最大步数（10）与全局工具调用数（默认 20）双层封顶后的强制总结 |
 | AI 可靠性 | 超时、重试、熔断、降级、并发舱壁；Redis Lua 令牌桶用户限流；失败响应统一脱敏 |
@@ -188,9 +188,13 @@ RAG2AGENT_TOOL_TIMEOUT_MILLIS=10000
 ROCKETMQ_NAMESRV=localhost:19876
 RAG2AGENT_EMBEDDING_CACHE_ENABLED=true
 RAG2AGENT_RATE_LIMIT=60
+RAG2AGENT_DOCLING_ENABLED=false
+RAG2AGENT_DOCLING_BASE_URL=http://localhost:5001
 ```
 
-`RAG2AGENT_MQ_ENABLED`、`RAG2AGENT_CHINESE_SEARCH_MODE`、`RAG2AGENT_EMBEDDING_*`、`RAG2AGENT_RATE_LIMIT_*`、`RAG2AGENT_AI_RESILIENCE_*`、`RAG2AGENT_MCP_REMOTE_*` 等均可在 `.env` 或环境变量中覆盖，默认值见 `bootstrap/src/main/resources/application.yml`。价格相关变量以 `DEEPSEEK_*_PRICE_*` / `SILICONFLOW_*_PRICE_*` 前缀为主，默认使用官方分时 / 免费用量口径。
+`RAG2AGENT_MQ_ENABLED`、`RAG2AGENT_CHINESE_SEARCH_MODE`、`RAG2AGENT_EMBEDDING_*`、`RAG2AGENT_RATE_LIMIT_*`、`RAG2AGENT_AI_RESILIENCE_*`、`RAG2AGENT_MCP_REMOTE_*`、`RAG2AGENT_DOCLING_*` 等均可在 `.env` 或环境变量中覆盖，默认值见 `bootstrap/src/main/resources/application.yml`。价格相关变量以 `DEEPSEEK_*_PRICE_*` / `SILICONFLOW_*_PRICE_*` 前缀为主，默认使用官方分时 / 免费用量口径。
+
+Docling 默认关闭；启用后需单独运行 `docling-serve`，可解析非 PDF 文档、扫描件并提供表格结构。解析结果中的元素、表格、表格行和资产会随文档版本写入 `009_document_intelligence.sql` 创建的结构表。
 
 接口限流为惰性令牌桶：`RAG2AGENT_RATE_LIMIT` 作为桶容量，`RAG2AGENT_RATE_LIMIT_WINDOW_SECONDS` 作为补充窗口，实际每秒补速率 = 容量 / 窗口秒（默认 60 / 60 = 1 个/秒，允许受控突发）；登录失败锁定仍为固定窗口计数。
 
@@ -333,6 +337,7 @@ RAG2Agent/
 
 - [docs/tech-selection.md](docs/tech-selection.md)：技术选型、模块边界、配置和演进路线
 - [docs/development-plan.md](docs/development-plan.md)：阶段计划与实际落地状态
+- [docs/enterprise-agent-upgrade-plan.md](docs/enterprise-agent-upgrade-plan.md)：企业级多模态 Agent 升级功能、选型、数据契约与验收计划
 - [docs/pitfalls-and-verification.md](docs/pitfalls-and-verification.md)：端口、中间件和真实验收翻车记录
 - [docs/observability.md](docs/observability.md)：指标命名、标签和 `outcome` 枚举约定
 - [docs/todo.md](docs/todo.md)：按优先级维护的工程问题、风险和后续任务

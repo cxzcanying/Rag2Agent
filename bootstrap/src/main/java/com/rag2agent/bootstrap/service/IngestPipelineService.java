@@ -8,16 +8,13 @@ import com.rag2agent.bootstrap.mapper.DocumentMetaMapper;
 import com.rag2agent.bootstrap.storage.MinioStorageService;
 import com.rag2agent.infra.ai.client.EmbeddingClient;
 import com.rag2agent.infra.ai.model.EmbeddingRequest;
-import com.rag2agent.rag.core.document.DocumentSource;
 import com.rag2agent.rag.core.document.ParsedDocument;
-import com.rag2agent.rag.core.document.impl.PdfBoxDocumentParser;
 import com.rag2agent.rag.core.split.TextChunk;
 import com.rag2agent.rag.core.split.impl.RecursiveTextSplitter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -71,6 +68,8 @@ public class IngestPipelineService {
     private final EmbeddingClient embeddingClient;
     private final IngestTaskService ingestTaskService;
     private final QueryEmbeddingCache queryEmbeddingCache;
+    private final DocumentParseService documentParseService;
+    private final DocumentStructureRepository documentStructureRepository;
     private final TransactionTemplate transactionTemplate;
     private final StringRedisTemplate redis;
     private final MeterRegistry meterRegistry;
@@ -83,10 +82,12 @@ public class IngestPipelineService {
             IngestTaskService ingestTaskService,
             PlatformTransactionManager transactionManager,
             StringRedisTemplate redis,
-            QueryEmbeddingCache queryEmbeddingCache) {
+            QueryEmbeddingCache queryEmbeddingCache,
+            DocumentParseService documentParseService,
+            DocumentStructureRepository documentStructureRepository) {
         this(documentMapper, chunkMapper, storage, embeddingClient, ingestTaskService,
                 transactionManager, redis, io.micrometer.core.instrument.Metrics.globalRegistry,
-                queryEmbeddingCache);
+                queryEmbeddingCache, documentParseService, documentStructureRepository);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -99,7 +100,9 @@ public class IngestPipelineService {
             PlatformTransactionManager transactionManager,
             StringRedisTemplate redis,
             MeterRegistry meterRegistry,
-            QueryEmbeddingCache queryEmbeddingCache) {
+            QueryEmbeddingCache queryEmbeddingCache,
+            DocumentParseService documentParseService,
+            DocumentStructureRepository documentStructureRepository) {
         this.documentMapper = documentMapper;
         this.chunkMapper = chunkMapper;
         this.storage = storage;
@@ -111,6 +114,8 @@ public class IngestPipelineService {
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.redis = redis;
         this.meterRegistry = meterRegistry;
+        this.documentParseService = documentParseService;
+        this.documentStructureRepository = documentStructureRepository;
     }
 
     public void process(Long documentId) {
@@ -174,13 +179,13 @@ public class IngestPipelineService {
     }
 
     private void processLocked(Long documentId, Long taskId) {
-        // 前置校验：文档必须存在且为 PDF（第一版仅支持文本型 PDF）
+        // 前置校验：文档必须存在且类型在解析器支持范围内
         DocumentMeta document = documentMapper.selectById(documentId);
         if (document == null) {
             throw new IllegalStateException("文档不存在: " + documentId);
         }
-        if (!"pdf".equalsIgnoreCase(document.getFileType())) {
-            throw new IllegalStateException("暂仅支持 PDF 入库，当前类型: " + document.getFileType());
+        if (!DocumentParseService.supports(document.getFileType())) {
+            throw new IllegalStateException("不支持的文档类型: " + document.getFileType());
         }
 
         // 幂等保护：RocketMQ 重试时同一消息可能被再次消费，
@@ -205,17 +210,21 @@ public class IngestPipelineService {
                 .eq(DocumentMeta::getId, documentId)
                 .set(DocumentMeta::getStatus, "INDEXING"));
 
-        Path tempPdf = null;
+        Path tempFile = null;
         try {
-            tempPdf = Files.createTempFile("rag2agent-", ".pdf");
-            storage.downloadTo(document.getStoragePath(), tempPdf);
-            ParsedDocument parsed = new PdfBoxDocumentParser().parse(new DocumentSource(
-                    String.valueOf(documentId), document.getFileName(), tempPdf.toUri(),
-                    "application/pdf", Map.of()));
+            String extension = DocumentParseService.normalizeExtension(document.getFileType());
+            tempFile = Files.createTempFile("rag2agent-", "." + extension);
+            storage.downloadTo(document.getStoragePath(), tempFile);
+            var structured = documentParseService.parse(
+                    String.valueOf(documentId),
+                    document.getFileName(),
+                    extension,
+                    tempFile);
+            ParsedDocument parsed = structured.toParsedDocument();
 
-            // 扫描件/无文本层 PDF 会解析出空文本，0 chunk 却标 INDEXED，检索无结果但状态正常；这里提前拒绝
+            // 空文本会生成 0 chunk 却标记成功，检索无结果但状态正常；这里提前拒绝
             if (parsed.text() == null || parsed.text().trim().length() < 50) {
-                throw new IllegalStateException("PDF 提取文本为空或过短，可能为扫描件，暂不支持 OCR");
+                throw new IllegalStateException("文档提取文本为空或过短，请检查 OCR 或原文质量");
             }
             ingestTaskService.markStage(task.getId(), "SPLITTING");
             List<TextChunk> chunks = new RecursiveTextSplitter().split(parsed);
@@ -226,6 +235,7 @@ public class IngestPipelineService {
             // 上次可能写到一半失败（如第 N 批 embedding 挂了），重试时先删再插，保证不产生重复/残缺数据
             chunkMapper.deleteByDocumentAndVersion(documentId, nextVersion);
             persistChunks(document, chunks, nextVersion);
+            documentStructureRepository.replace(document, structured, nextVersion);
 
             // 版本切换：更新文档版本 + 删除所有旧版本 chunk，同一事务内原子完成
             switchVersion(documentId, nextVersion);
@@ -239,10 +249,10 @@ public class IngestPipelineService {
                     .set(DocumentMeta::getStatus, "FAILED"));
             throw new RuntimeException("入库处理失败: " + e.getMessage(), e);
         } finally {
-            // 临时 PDF 用完即删，避免磁盘残留（清理失败不影响主流程）
-            if (tempPdf != null) {
+            // 临时文件用完即删，避免磁盘残留（清理失败不影响主流程）
+            if (tempFile != null) {
                 try {
-                    Files.deleteIfExists(tempPdf);
+                    Files.deleteIfExists(tempFile);
                 } catch (Exception ignored) {
                     // 临时文件清理失败不影响主流程
                 }
@@ -295,6 +305,7 @@ public class IngestPipelineService {
                 throw new IllegalStateException("文档版本切换失败: " + documentId);
             }
             chunkMapper.deleteBelowVersion(documentId, version);
+            documentStructureRepository.deleteBelowVersion(documentId, version);
         });
     }
 

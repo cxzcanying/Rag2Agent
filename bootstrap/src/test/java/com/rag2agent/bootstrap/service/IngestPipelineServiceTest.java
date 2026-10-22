@@ -36,7 +36,8 @@ class IngestPipelineServiceTest {
         IngestPipelineService service = new IngestPipelineService(
                 mock(com.rag2agent.bootstrap.mapper.DocumentMetaMapper.class), chunks,
                 mock(MinioStorageService.class), embedding, mock(IngestTaskService.class),
-                mock(PlatformTransactionManager.class), mock(StringRedisTemplate.class), cache);
+                mock(PlatformTransactionManager.class), mock(StringRedisTemplate.class), cache,
+                mock(DocumentParseService.class), mock(DocumentStructureRepository.class));
 
         DocumentMeta document = new DocumentMeta();
         document.setId(1L);
@@ -61,7 +62,8 @@ class IngestPipelineServiceTest {
                 mock(DocumentChunkMapper.class), mock(MinioStorageService.class),
                 mock(EmbeddingClient.class), mock(IngestTaskService.class),
                 mock(PlatformTransactionManager.class), mock(StringRedisTemplate.class), registry,
-                mock(QueryEmbeddingCache.class));
+                mock(QueryEmbeddingCache.class), mock(DocumentParseService.class),
+                mock(DocumentStructureRepository.class));
         service.recordLeaseRenewal(0L);
         service.recordLeaseRenewalError();
         service.recordLeaseReleaseError();

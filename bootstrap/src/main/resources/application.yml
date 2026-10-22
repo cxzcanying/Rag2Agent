@@ -113,6 +113,18 @@ rag2agent:
       token: ${RAG2AGENT_MCP_REMOTE_TOKEN:dev-mcp-token}
       scopes: ${RAG2AGENT_MCP_REMOTE_SCOPES:mcp:read}
   ai:
+    docling:
+      enabled: ${RAG2AGENT_DOCLING_ENABLED:false}
+      base-url: ${RAG2AGENT_DOCLING_BASE_URL:http://localhost:5001}
+      endpoint: ${RAG2AGENT_DOCLING_ENDPOINT:/v1/convert/file}
+      connect-timeout-seconds: ${RAG2AGENT_DOCLING_CONNECT_TIMEOUT_SECONDS:10}
+      read-timeout-seconds: ${RAG2AGENT_DOCLING_READ_TIMEOUT_SECONDS:180}
+      write-timeout-seconds: ${RAG2AGENT_DOCLING_WRITE_TIMEOUT_SECONDS:60}
+      table-mode: ${RAG2AGENT_DOCLING_TABLE_MODE:accurate}
+      ocr-preset: ${RAG2AGENT_DOCLING_OCR_PRESET:rapidocr}
+      ocr-languages:
+        - ${RAG2AGENT_DOCLING_OCR_LANGUAGE_1:zh-Hans}
+        - ${RAG2AGENT_DOCLING_OCR_LANGUAGE_2:en}
     cost:
       prices:
         "[deepseek/deepseek-v4-flash]":
