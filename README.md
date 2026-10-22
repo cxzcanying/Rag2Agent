@@ -226,6 +226,8 @@ POST /api/chat                         # SSE
 POST /api/agent/approvals/{runId}
 GET  /api/agent/sessions/{sessionId}/events?afterSeq={seq}&limit={limit}
 GET  /api/agent/runs/{runId}/tasks
+GET  /api/agent/memories?kbId={kbId}&limit={limit}
+DELETE /api/agent/memories/{memoryId}
 
 POST /api/evaluations/cases/import
 POST /api/evaluations/runs

@@ -80,6 +80,29 @@ public class AgentMemoryService {
                 "DELETE FROM agent_memory WHERE id = ? AND user_id = ?", memoryId, userId);
     }
 
+    public List<MemoryRecord> list(Long userId, Long kbId, int limit) {
+        int boundedLimit = Math.min(Math.max(limit, 1), 100);
+        return jdbc.query("""
+                SELECT id, kb_id, scope, memory_type, content, source, confidence,
+                       0.0 AS score
+                FROM agent_memory
+                WHERE user_id = ?
+                  AND (kb_id = ? OR kb_id IS NULL)
+                  AND (expires_at IS NULL OR expires_at > now())
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """, (rs, rowNum) -> new MemoryRecord(
+                        rs.getLong("id"),
+                        rs.getObject("kb_id", Long.class),
+                        rs.getString("scope"),
+                        rs.getString("memory_type"),
+                        rs.getString("content"),
+                        rs.getString("source"),
+                        rs.getDouble("confidence"),
+                        rs.getDouble("score")),
+                userId, kbId, boundedLimit);
+    }
+
     private String vector(List<Float> vector) {
         StringBuilder value = new StringBuilder("[");
         for (int index = 0; index < vector.size(); index++) {
