@@ -75,6 +75,15 @@ rag2agent:
   search:
     parallel-timeout-millis: ${RAG2AGENT_SEARCH_PARALLEL_TIMEOUT_MILLIS:10000}
     chinese-search-mode: ${RAG2AGENT_CHINESE_SEARCH_MODE:auto}
+  graph:
+    neo4j:
+      enabled: ${RAG2AGENT_NEO4J_ENABLED:false}
+      uri: ${RAG2AGENT_NEO4J_URI:bolt://localhost:17687}
+      username: ${RAG2AGENT_NEO4J_USERNAME:neo4j}
+      password: ${NEO4J_PASSWORD:rag2agent-password}
+      database: ${RAG2AGENT_NEO4J_DATABASE:neo4j}
+      max-hops: ${RAG2AGENT_NEO4J_MAX_HOPS:2}
+      max-results: ${RAG2AGENT_NEO4J_MAX_RESULTS:20}
   cache:
     embedding:
       enabled: ${RAG2AGENT_EMBEDDING_CACHE_ENABLED:true}

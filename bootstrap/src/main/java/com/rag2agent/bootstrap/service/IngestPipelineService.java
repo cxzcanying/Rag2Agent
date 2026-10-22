@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.entity.DocumentMeta;
 import com.rag2agent.bootstrap.entity.IngestTask;
+import com.rag2agent.bootstrap.graph.GraphIngestionService;
 import com.rag2agent.bootstrap.mapper.DocumentChunkMapper;
 import com.rag2agent.bootstrap.mapper.DocumentMetaMapper;
 import com.rag2agent.bootstrap.storage.MinioStorageService;
@@ -76,6 +77,7 @@ public class IngestPipelineService {
     private final DocumentParseService documentParseService;
     private final DocumentStructureRepository documentStructureRepository;
     private final ObjectMapper objectMapper;
+    private final GraphIngestionService graphIngestionService;
     private final TransactionTemplate transactionTemplate;
     private final StringRedisTemplate redis;
     private final MeterRegistry meterRegistry;
@@ -91,10 +93,12 @@ public class IngestPipelineService {
             QueryEmbeddingCache queryEmbeddingCache,
             DocumentParseService documentParseService,
             DocumentStructureRepository documentStructureRepository,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            GraphIngestionService graphIngestionService) {
         this(documentMapper, chunkMapper, storage, embeddingClient, ingestTaskService,
                 transactionManager, redis, io.micrometer.core.instrument.Metrics.globalRegistry,
-                queryEmbeddingCache, documentParseService, documentStructureRepository, objectMapper);
+                queryEmbeddingCache, documentParseService, documentStructureRepository,
+                objectMapper, graphIngestionService);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -110,7 +114,8 @@ public class IngestPipelineService {
             QueryEmbeddingCache queryEmbeddingCache,
             DocumentParseService documentParseService,
             DocumentStructureRepository documentStructureRepository,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            GraphIngestionService graphIngestionService) {
         this.documentMapper = documentMapper;
         this.chunkMapper = chunkMapper;
         this.storage = storage;
@@ -125,6 +130,7 @@ public class IngestPipelineService {
         this.documentParseService = documentParseService;
         this.documentStructureRepository = documentStructureRepository;
         this.objectMapper = objectMapper;
+        this.graphIngestionService = graphIngestionService;
     }
 
     public void process(Long documentId) {
@@ -246,6 +252,7 @@ public class IngestPipelineService {
             chunkMapper.deleteByDocumentAndVersion(documentId, nextVersion);
             persistChunks(document, chunks, nextVersion);
             documentStructureRepository.replace(document, structured, nextVersion);
+            graphIngestionService.index(document, structured, nextVersion);
 
             // 版本切换：更新文档版本 + 删除所有旧版本 chunk，同一事务内原子完成
             switchVersion(documentId, nextVersion);

@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.config.EmbeddingCacheProperties;
 import com.rag2agent.bootstrap.entity.DocumentMeta;
+import com.rag2agent.bootstrap.graph.GraphIngestionService;
 import com.rag2agent.bootstrap.mapper.DocumentChunkMapper;
 import com.rag2agent.bootstrap.storage.MinioStorageService;
 import com.rag2agent.infra.ai.client.EmbeddingClient;
@@ -38,7 +39,7 @@ class IngestPipelineServiceTest {
                 mock(MinioStorageService.class), embedding, mock(IngestTaskService.class),
                 mock(PlatformTransactionManager.class), mock(StringRedisTemplate.class), cache,
                 mock(DocumentParseService.class), mock(DocumentStructureRepository.class),
-                new ObjectMapper());
+                new ObjectMapper(), mock(GraphIngestionService.class));
 
         DocumentMeta document = new DocumentMeta();
         document.setId(1L);
@@ -64,7 +65,8 @@ class IngestPipelineServiceTest {
                 mock(EmbeddingClient.class), mock(IngestTaskService.class),
                 mock(PlatformTransactionManager.class), mock(StringRedisTemplate.class), registry,
                 mock(QueryEmbeddingCache.class), mock(DocumentParseService.class),
-                mock(DocumentStructureRepository.class), new ObjectMapper());
+                mock(DocumentStructureRepository.class), new ObjectMapper(),
+                mock(GraphIngestionService.class));
         service.recordLeaseRenewal(0L);
         service.recordLeaseRenewalError();
         service.recordLeaseReleaseError();
