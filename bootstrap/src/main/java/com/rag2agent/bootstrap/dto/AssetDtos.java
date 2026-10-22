@@ -13,6 +13,7 @@ public final class AssetDtos {
             String type,
             String title,
             String contentType,
+            String visionText,
             Integer pageNo,
             BoundingBoxView boundingBox,
             String url,
@@ -24,6 +25,7 @@ public final class AssetDtos {
                     asset.assetType(),
                     asset.title(),
                     asset.contentType(),
+                    asset.visionText(),
                     asset.pageNo(),
                     asset.boundingBox() == null
                             ? null

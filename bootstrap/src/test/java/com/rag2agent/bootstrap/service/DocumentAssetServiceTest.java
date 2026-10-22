@@ -27,7 +27,7 @@ class DocumentAssetServiceTest {
         when(repository.findAsset(7L, 2, "pictures-0"))
                 .thenReturn(Optional.of(new AssetRecord(
                         "pictures-0", "picture", "趋势图", "assets/7/2/pictures-0",
-                        "image/png", 3, null)));
+                        "image/png", null, 3, null)));
         when(storage.presignGet("assets/7/2/pictures-0", 600))
                 .thenReturn("http://minio/asset");
 
@@ -52,7 +52,7 @@ class DocumentAssetServiceTest {
         when(repository.findAsset(7L, 2, "pictures-0"))
                 .thenReturn(Optional.of(new AssetRecord(
                         "pictures-0", "picture", "趋势图", "assets/7/2/pictures-0",
-                        "image/png", 3, null)));
+                        "image/png", "趋势向上", 3, null)));
         when(vision.available()).thenReturn(true);
         when(storage.download("assets/7/2/pictures-0")).thenReturn(new byte[] {1});
         when(vision.describe(org.mockito.ArgumentMatchers.any(VisionRequest.class)))

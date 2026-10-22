@@ -103,7 +103,8 @@ public class DocumentStructureRepository {
                     asset.id(), document.getId(), document.getKbId(), version, asset.id(),
                     asset.type(), asset.title(), contentReference, asset.page(),
                     bbox(asset.boundingBox()), json(Map.of(
-                            "contentType", asset.contentType() == null ? "" : asset.contentType()))
+                            "contentType", asset.contentType() == null ? "" : asset.contentType(),
+                            "visionText", asset.visionText() == null ? "" : asset.visionText()))
             });
         }
         jdbc.batchUpdate("""
@@ -249,9 +250,11 @@ public class DocumentStructureRepository {
                 WHERE document_id = ? AND version = ? AND asset_id = ?
                 """, (rs, rowNum) -> {
                     String contentType = null;
+                    String visionText = null;
                     try {
-                        contentType = mapper.readTree(rs.getString("metadata"))
-                                .path("contentType").asText(null);
+                        JsonNode metadata = mapper.readTree(rs.getString("metadata"));
+                        contentType = metadata.path("contentType").asText(null);
+                        visionText = metadata.path("visionText").asText(null);
                     } catch (JsonProcessingException exception) {
                         throw new IllegalStateException("资产 metadata 解析失败", exception);
                     }
@@ -261,6 +264,7 @@ public class DocumentStructureRepository {
                             rs.getString("title"),
                             rs.getString("content_reference"),
                             contentType,
+                            visionText,
                             rs.getObject("page_no", Integer.class),
                             boundingBox(rs.getString("bbox")));
                 }, documentId, version, assetId);
@@ -325,6 +329,7 @@ public class DocumentStructureRepository {
             String title,
             String contentReference,
             String contentType,
+            String visionText,
             Integer pageNo,
             BoundingBox boundingBox) {}
 }

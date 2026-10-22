@@ -118,6 +118,7 @@ public record StructuredDocument(
             String contentReference,
             byte[] binary,
             String contentType,
+            String visionText,
             Integer page,
             BoundingBox boundingBox) {
 
@@ -133,6 +134,18 @@ public record StructuredDocument(
                 Integer page,
                 BoundingBox boundingBox) {
             this(id, type, title, contentReference, null, null, page, boundingBox);
+        }
+
+        public Asset(
+                String id,
+                String type,
+                String title,
+                String contentReference,
+                byte[] binary,
+                String contentType,
+                Integer page,
+                BoundingBox boundingBox) {
+            this(id, type, title, contentReference, binary, contentType, null, page, boundingBox);
         }
     }
 }

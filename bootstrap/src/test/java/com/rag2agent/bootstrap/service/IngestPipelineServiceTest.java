@@ -39,7 +39,8 @@ class IngestPipelineServiceTest {
                 mock(MinioStorageService.class), embedding, mock(IngestTaskService.class),
                 mock(PlatformTransactionManager.class), mock(StringRedisTemplate.class), cache,
                 mock(DocumentParseService.class), mock(DocumentStructureRepository.class),
-                new ObjectMapper(), mock(GraphIngestionService.class));
+                new ObjectMapper(), mock(GraphIngestionService.class),
+                mock(VisionEnrichmentService.class));
 
         DocumentMeta document = new DocumentMeta();
         document.setId(1L);
@@ -66,7 +67,7 @@ class IngestPipelineServiceTest {
                 mock(PlatformTransactionManager.class), mock(StringRedisTemplate.class), registry,
                 mock(QueryEmbeddingCache.class), mock(DocumentParseService.class),
                 mock(DocumentStructureRepository.class), new ObjectMapper(),
-                mock(GraphIngestionService.class));
+                mock(GraphIngestionService.class), mock(VisionEnrichmentService.class));
         service.recordLeaseRenewal(0L);
         service.recordLeaseRenewalError();
         service.recordLeaseReleaseError();

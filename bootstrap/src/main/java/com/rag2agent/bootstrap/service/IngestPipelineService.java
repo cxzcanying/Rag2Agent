@@ -15,6 +15,7 @@ import com.rag2agent.rag.core.document.ParsedDocument;
 import com.rag2agent.rag.core.split.TextChunk;
 import com.rag2agent.rag.core.split.impl.RecursiveTextSplitter;
 import com.rag2agent.rag.core.split.impl.TableChunkBuilder;
+import com.rag2agent.rag.core.split.impl.AssetChunkBuilder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -78,6 +79,7 @@ public class IngestPipelineService {
     private final DocumentStructureRepository documentStructureRepository;
     private final ObjectMapper objectMapper;
     private final GraphIngestionService graphIngestionService;
+    private final VisionEnrichmentService visionEnrichmentService;
     private final TransactionTemplate transactionTemplate;
     private final StringRedisTemplate redis;
     private final MeterRegistry meterRegistry;
@@ -94,11 +96,12 @@ public class IngestPipelineService {
             DocumentParseService documentParseService,
             DocumentStructureRepository documentStructureRepository,
             ObjectMapper objectMapper,
-            GraphIngestionService graphIngestionService) {
+            GraphIngestionService graphIngestionService,
+            VisionEnrichmentService visionEnrichmentService) {
         this(documentMapper, chunkMapper, storage, embeddingClient, ingestTaskService,
                 transactionManager, redis, io.micrometer.core.instrument.Metrics.globalRegistry,
                 queryEmbeddingCache, documentParseService, documentStructureRepository,
-                objectMapper, graphIngestionService);
+                objectMapper, graphIngestionService, visionEnrichmentService);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -115,7 +118,8 @@ public class IngestPipelineService {
             DocumentParseService documentParseService,
             DocumentStructureRepository documentStructureRepository,
             ObjectMapper objectMapper,
-            GraphIngestionService graphIngestionService) {
+            GraphIngestionService graphIngestionService,
+            VisionEnrichmentService visionEnrichmentService) {
         this.documentMapper = documentMapper;
         this.chunkMapper = chunkMapper;
         this.storage = storage;
@@ -131,6 +135,7 @@ public class IngestPipelineService {
         this.documentStructureRepository = documentStructureRepository;
         this.objectMapper = objectMapper;
         this.graphIngestionService = graphIngestionService;
+        this.visionEnrichmentService = visionEnrichmentService;
     }
 
     public void process(Long documentId) {
@@ -235,6 +240,7 @@ public class IngestPipelineService {
                     document.getFileName(),
                     extension,
                     tempFile);
+            structured = visionEnrichmentService.enrich(structured);
             ParsedDocument parsed = structured.toParsedDocument();
 
             // 空文本会生成 0 chunk 却标记成功，检索无结果但状态正常；这里提前拒绝
@@ -244,6 +250,7 @@ public class IngestPipelineService {
             ingestTaskService.markStage(task.getId(), "SPLITTING");
             List<TextChunk> chunks = new java.util.ArrayList<>(new RecursiveTextSplitter().split(parsed));
             chunks.addAll(new TableChunkBuilder().build(structured, chunks.size()));
+            chunks.addAll(new AssetChunkBuilder().build(structured, chunks.size()));
             log.info("文档 {} 切块完成: {} chunks", documentId, chunks.size());
 
             ingestTaskService.markStage(task.getId(), "EMBEDDING");
