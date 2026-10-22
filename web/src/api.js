@@ -29,7 +29,20 @@ export const knowledgeBases = {
   create: (body, idempotencyKey = crypto.randomUUID()) => request('/knowledge-bases', {
     method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(body)
   }),
-  list: () => request('/knowledge-bases')
+  list: () => request('/knowledge-bases'),
+  updateVisibility: (kbId, visibility) => request('/knowledge-bases/' + kbId + '/visibility', {
+    method: 'PATCH',
+    body: JSON.stringify({ visibility })
+  }),
+  members: (kbId) => request('/knowledge-bases/' + kbId + '/members'),
+  grantMember: (kbId, body) => request('/knowledge-bases/' + kbId + '/members', {
+    method: 'POST',
+    body: JSON.stringify(body)
+  }),
+  revokeMember: (kbId, userId) => request(
+    '/knowledge-bases/' + kbId + '/members/' + userId,
+    { method: 'DELETE' }
+  )
 }
 
 export const documents = {
@@ -117,5 +130,6 @@ export const evaluations = {
   listRuns: (kbId) => request('/evaluations/runs?kbId=' + kbId),
   getRun: (runId) => request('/evaluations/runs/' + runId),
   results: (runId) => request('/evaluations/runs/' + runId + '/results'),
-  cancel: (runId) => request('/evaluations/runs/' + runId + '/cancel', { method: 'POST' })
+  cancel: (runId) => request('/evaluations/runs/' + runId + '/cancel', { method: 'POST' }),
+  goldSetCoverage: (kbId) => request('/evaluations/gold-set/coverage?kbId=' + kbId)
 }

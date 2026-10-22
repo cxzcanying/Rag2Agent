@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { knowledgeBases, documents } from '../api'
 
@@ -8,9 +8,27 @@ const currentKbId = ref(null)
 const docList = ref([])
 const creating = ref(false)
 const newKbName = ref('')
+const newKbVisibility = ref('PRIVATE')
 const uploading = ref(false)
 const fileRef = ref()
 const pollTimer = ref(null)
+const visibilityVisible = ref(false)
+const visibilityValue = ref('PRIVATE')
+const membersVisible = ref(false)
+const members = ref([])
+const memberUsername = ref('')
+const memberRole = ref('VIEWER')
+const memberLoading = ref(false)
+
+const currentKb = computed(
+  () => kbList.value.find((kb) => kb.id === currentKbId.value) || null
+)
+const canWrite = computed(
+  () => currentKb.value && currentKb.value.accessRole !== 'VIEWER'
+)
+const canManage = computed(
+  () => ['OWNER', 'ADMIN'].includes(currentKb.value?.accessRole)
+)
 
 async function loadKbs() {
   kbList.value = await knowledgeBases.list()
@@ -30,10 +48,71 @@ async function createKb() {
     ElMessage.warning('请输入知识库名称')
     return
   }
-  await knowledgeBases.create({ name: newKbName.value })
+  await knowledgeBases.create({
+    name: newKbName.value,
+    visibility: newKbVisibility.value
+  })
   creating.value = false
   newKbName.value = ''
+  newKbVisibility.value = 'PRIVATE'
   await loadKbs()
+}
+
+function openVisibility() {
+  visibilityValue.value = currentKb.value?.visibility || 'PRIVATE'
+  visibilityVisible.value = true
+}
+
+async function saveVisibility() {
+  try {
+    await knowledgeBases.updateVisibility(currentKbId.value, visibilityValue.value)
+    ElMessage.success('可见范围已更新')
+    visibilityVisible.value = false
+    await loadKbs()
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
+async function openMembers() {
+  membersVisible.value = true
+  await loadMembers()
+}
+
+async function loadMembers() {
+  memberLoading.value = true
+  try {
+    members.value = await knowledgeBases.members(currentKbId.value)
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    memberLoading.value = false
+  }
+}
+
+async function grantMember() {
+  if (!memberUsername.value.trim()) return ElMessage.warning('请输入成员用户名')
+  try {
+    await knowledgeBases.grantMember(currentKbId.value, {
+      username: memberUsername.value.trim(),
+      role: memberRole.value
+    })
+    memberUsername.value = ''
+    ElMessage.success('成员权限已保存')
+    await loadMembers()
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
+async function revokeMember(member) {
+  try {
+    await knowledgeBases.revokeMember(currentKbId.value, member.userId)
+    ElMessage.success('已移除成员')
+    await loadMembers()
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
 }
 
 async function onFileChange(event) {
@@ -98,10 +177,19 @@ onUnmounted(stopPolling)
         <el-select v-model="currentKbId" placeholder="选择知识库" style="width: 240px" @change="loadDocs">
           <el-option v-for="kb in kbList" :key="kb.id" :label="kb.name" :value="kb.id" />
         </el-select>
+        <el-tag v-if="currentKb" type="info">
+          {{ currentKb.visibility }} · {{ currentKb.accessRole }}
+        </el-tag>
         <el-button type="primary" @click="creating = true">新建知识库</el-button>
-        <el-button type="success" :loading="uploading" :disabled="!currentKbId">
+        <el-button v-if="canManage" @click="openVisibility">可见范围</el-button>
+        <el-button v-if="canManage" @click="openMembers">成员</el-button>
+        <el-button
+          type="success"
+          :loading="uploading"
+          :disabled="!currentKbId || !canWrite"
+        >
           <label class="upload-label">
-            上传文档
+            {{ canWrite ? '上传文档' : '只读知识库' }}
             <input ref="fileRef" type="file" accept=".pdf,.txt,.md,.docx" hidden @change="onFileChange" />
           </label>
         </el-button>
@@ -109,10 +197,50 @@ onUnmounted(stopPolling)
 
       <el-dialog v-model="creating" title="新建知识库" width="420px">
         <el-input v-model="newKbName" placeholder="知识库名称" />
+        <el-select v-model="newKbVisibility" style="width: 100%; margin-top: 12px">
+          <el-option label="仅成员可见" value="PRIVATE" />
+          <el-option label="同组织可读" value="ORGANIZATION" />
+          <el-option label="同租户可读" value="TENANT" />
+        </el-select>
         <template #footer>
           <el-button @click="creating = false">取消</el-button>
           <el-button type="primary" @click="createKb">创建</el-button>
         </template>
+      </el-dialog>
+
+      <el-dialog v-model="visibilityVisible" title="知识库可见范围" width="420px">
+        <el-radio-group v-model="visibilityValue">
+          <el-radio value="PRIVATE">仅成员可见</el-radio>
+          <el-radio value="ORGANIZATION">同组织可读</el-radio>
+          <el-radio value="TENANT">同租户可读</el-radio>
+        </el-radio-group>
+        <p class="dialog-hint">可见范围只授予读取权限，写入仍需要 EDITOR 或 ADMIN。</p>
+        <template #footer>
+          <el-button @click="visibilityVisible = false">取消</el-button>
+          <el-button type="primary" @click="saveVisibility">保存</el-button>
+        </template>
+      </el-dialog>
+
+      <el-dialog v-model="membersVisible" title="知识库成员" width="680px">
+        <div class="member-form">
+          <el-input v-model="memberUsername" placeholder="成员用户名" />
+          <el-select v-model="memberRole" style="width: 130px">
+            <el-option label="只读" value="VIEWER" />
+            <el-option label="可写" value="EDITOR" />
+            <el-option label="管理员" value="ADMIN" />
+          </el-select>
+          <el-button type="primary" @click="grantMember">添加/更新</el-button>
+        </div>
+        <el-table v-loading="memberLoading" :data="members" empty-text="暂无成员">
+          <el-table-column prop="username" label="用户名" />
+          <el-table-column prop="nickname" label="昵称" />
+          <el-table-column prop="role" label="角色" width="100" />
+          <el-table-column label="操作" width="90">
+            <template #default="{ row }">
+              <el-button link type="danger" @click="revokeMember(row)">移除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
       </el-dialog>
 
       <el-table :data="docList" style="margin-top: 16px" empty-text="暂无文档，请上传">
@@ -181,5 +309,16 @@ onUnmounted(stopPolling)
 .estimate {
   color: #909399;
   font-size: 12px;
+}
+.dialog-hint {
+  margin-top: 16px;
+  color: #909399;
+  font-size: 13px;
+}
+.member-form {
+  display: grid;
+  grid-template-columns: 1fr 130px auto;
+  gap: 10px;
+  margin-bottom: 14px;
 }
 </style>

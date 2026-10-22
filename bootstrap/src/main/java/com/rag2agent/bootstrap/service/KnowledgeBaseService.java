@@ -1,5 +1,6 @@
 package com.rag2agent.bootstrap.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.rag2agent.bootstrap.dto.KbDtos.CreateKnowledgeBaseRequest;
 import com.rag2agent.bootstrap.dto.KbDtos.KnowledgeBaseMemberView;
 import com.rag2agent.bootstrap.dto.KbDtos.KnowledgeBaseView;
@@ -42,6 +43,7 @@ public class KnowledgeBaseService {
         kb.setTenantId(user.getTenantId());
         kb.setOrgId(user.getOrgId());
         kb.setVisibility(normalizeVisibility(request.visibility()));
+        kb.setAccessRole("OWNER");
         kbMapper.insert(kb);
         return KnowledgeBaseView.from(kb);
     }
@@ -106,13 +108,12 @@ public class KnowledgeBaseService {
     }
 
     public KnowledgeBaseMemberView grant(
-            Long userId, Long kbId, Long targetUserId, String role) {
+            Long userId, Long kbId, Long targetUserId, String username, String role) {
         requireAdmin(userId, kbId);
-        if (targetUserId == null || targetUserId <= 0) {
-            throw new BusinessException(ErrorCode.BAD_REQUEST, "userId 必须为正数");
-        }
         AppUser actor = requireUser(userId);
-        AppUser target = userMapper.selectById(targetUserId);
+        AppUser target = targetUserId == null
+                ? findUserByUsername(username)
+                : userMapper.selectById(targetUserId);
         if (target == null || !actor.getTenantId().equals(target.getTenantId())) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "目标用户不存在");
         }
@@ -122,7 +123,7 @@ public class KnowledgeBaseService {
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT (kb_id, user_id)
                 DO UPDATE SET role = EXCLUDED.role, updated_at = now()
-                """, kbId, targetUserId, actor.getTenantId(), normalizedRole);
+                """, kbId, target.getId(), actor.getTenantId(), normalizedRole);
         return new KnowledgeBaseMemberView(
                 target.getId(), target.getUsername(), target.getNickname(),
                 normalizedRole, Instant.now());
@@ -149,6 +150,15 @@ public class KnowledgeBaseService {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "用户租户信息无效");
         }
         return user;
+    }
+
+    private AppUser findUserByUsername(String username) {
+        if (username == null || username.isBlank()) {
+            throw new BusinessException(
+                    ErrorCode.BAD_REQUEST, "userId 或 username 必须提供一个");
+        }
+        return userMapper.selectOne(new LambdaQueryWrapper<AppUser>()
+                .eq(AppUser::getUsername, username.trim()));
     }
 
     private void requireKnowledgeBaseId(Long kbId) {

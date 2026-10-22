@@ -83,7 +83,8 @@ public class KnowledgeBaseController {
             @PathVariable Long kbId,
             @RequestBody @Valid GrantKnowledgeBaseMemberRequest request) {
         return ApiResponse.success(kbService.grant(
-                StpUtil.getLoginIdAsLong(), kbId, request.userId(), request.role()));
+                StpUtil.getLoginIdAsLong(), kbId,
+                request.userId(), request.username(), request.role()));
     }
 
     @DeleteMapping("/{kbId}/members/{userId}")

@@ -20,17 +20,21 @@ public final class KbDtos {
             Long tenantId,
             Long orgId,
             String visibility,
+            Long ownerUserId,
+            String accessRole,
             Instant createdAt) {
 
         public static KnowledgeBaseView from(KnowledgeBase kb) {
             return new KnowledgeBaseView(
                     kb.getId(), kb.getName(), kb.getDescription(),
-                    kb.getTenantId(), kb.getOrgId(), kb.getVisibility(), kb.getCreatedAt());
+                    kb.getTenantId(), kb.getOrgId(), kb.getVisibility(),
+                    kb.getOwnerUserId(), kb.getAccessRole(), kb.getCreatedAt());
         }
     }
 
     public record GrantKnowledgeBaseMemberRequest(
-            @jakarta.validation.constraints.NotNull(message = "userId 不能为空") Long userId,
+            Long userId,
+            String username,
             @NotBlank(message = "role 不能为空") String role) {}
 
     public record UpdateKnowledgeBaseVisibilityRequest(

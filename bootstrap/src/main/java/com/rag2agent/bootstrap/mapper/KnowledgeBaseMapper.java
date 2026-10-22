@@ -9,7 +9,17 @@ import org.apache.ibatis.annotations.Select;
 public interface KnowledgeBaseMapper extends BaseMapper<KnowledgeBase> {
 
     @Select("""
-            SELECT kb.*
+            SELECT kb.*,
+                   CASE
+                       WHEN kb.owner_user_id = #{userId} THEN 'OWNER'
+                       ELSE COALESCE((
+                           SELECT member.role
+                           FROM knowledge_base_member member
+                           WHERE member.kb_id = kb.id
+                             AND member.user_id = #{userId}
+                             AND member.tenant_id = #{tenantId}
+                       ), 'VIEWER')
+                   END AS access_role
             FROM knowledge_base kb
             WHERE kb.tenant_id = #{tenantId}
               AND (

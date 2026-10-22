@@ -13,8 +13,9 @@ const rrfK = ref(60)
 const rerankEnabled = ref(true)
 const evaluateGeneration = ref(false)
 const timeoutSeconds = ref(3600)
-const caseJson = ref('[{"question":"示例问题","expectedAnswer":"","goldenDocumentIds":[1]}]')
+const caseJson = ref('[\n  {\n    "question": "示例问题",\n    "expectedAnswer": "",\n    "goldenDocumentIds": [1],\n    "caseType": "RAG",\n    "evidence": {}\n  }\n]')
 const runs = ref([])
+const coverage = ref(null)
 const running = ref(false)
 const importing = ref(false)
 let pollTimer
@@ -23,7 +24,7 @@ async function loadKbs() {
   try {
     kbList.value = await knowledgeBases.list()
     if (!kbId.value && kbList.value.length) kbId.value = String(kbList.value[0].id)
-    await loadRuns()
+    await Promise.all([loadRuns(), loadCoverage()])
   } catch (e) {
     ElMessage.error(e.message)
   }
@@ -41,11 +42,23 @@ async function importCases() {
     importing.value = true
     const count = await evaluations.importCases({ kbId: Number(kbId.value), cases })
     ElMessage.success('已导入 ' + count + ' 条用例')
-    await loadRuns()
+    await Promise.all([loadRuns(), loadCoverage()])
   } catch (e) {
     ElMessage.error(e.message || 'JSON 格式错误')
   } finally {
     importing.value = false
+  }
+}
+
+async function loadCoverage() {
+  if (!kbId.value) {
+    coverage.value = null
+    return
+  }
+  try {
+    coverage.value = await evaluations.goldSetCoverage(Number(kbId.value))
+  } catch (e) {
+    ElMessage.error(e.message)
   }
 }
 
@@ -89,7 +102,10 @@ function formatMetric(value) {
   return value == null ? '-' : (Number(value) * 100).toFixed(1) + '%'
 }
 
-watch(kbId, loadRuns)
+watch(kbId, () => {
+  loadRuns()
+  loadCoverage()
+})
 onMounted(() => {
   loadKbs()
   pollTimer = window.setInterval(() => {
@@ -143,6 +159,33 @@ onUnmounted(() => window.clearInterval(pollTimer))
       <div class="section-heading">
         <h2>评测用例</h2>
         <el-button type="success" :loading="importing" @click="importCases">导入 JSON</el-button>
+      </div>
+      <div v-if="coverage" class="coverage">
+        <div class="coverage-head">
+          <strong>Gold Set 覆盖率</strong>
+          <el-tag :type="coverage.valid ? 'success' : 'danger'">
+            {{ coverage.valid ? '门禁通过' : '门禁未通过' }}
+          </el-tag>
+        </div>
+        <div class="coverage-grid">
+          <div v-for="(count, type) in coverage.caseCounts" :key="type" class="coverage-item">
+            <span>{{ type }}</span>
+            <strong>{{ count }}</strong>
+          </div>
+        </div>
+        <el-alert
+          v-if="coverage.missingCategories.length"
+          type="warning"
+          :closable="false"
+          :title="'缺少类别：' + coverage.missingCategories.join('、')"
+        />
+        <el-alert
+          v-for="(violation, index) in coverage.violations"
+          :key="index"
+          type="error"
+          :closable="false"
+          :title="violation.caseType + ' #' + violation.caseId + '：' + violation.message"
+        />
       </div>
       <el-input v-model="caseJson" type="textarea" :rows="6" spellcheck="false" />
     </section>
@@ -229,6 +272,33 @@ onUnmounted(() => window.clearInterval(pollTimer))
   margin: 0;
   font-size: 18px;
 }
+.coverage {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  background: #fafbfc;
+}
+.coverage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.coverage-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+.coverage-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px;
+}
 @media (max-width: 800px) {
   .control-form {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -238,6 +308,9 @@ onUnmounted(() => window.clearInterval(pollTimer))
   .control-form .el-form-item:nth-child(2),
   .control-form .el-form-item:nth-child(7) {
     grid-column: span 1;
+  }
+  .coverage-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

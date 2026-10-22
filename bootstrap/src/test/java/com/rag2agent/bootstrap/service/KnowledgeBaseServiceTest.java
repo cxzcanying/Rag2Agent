@@ -37,6 +37,7 @@ class KnowledgeBaseServiceTest {
         assertEquals(11L, created.getValue().getTenantId());
         assertEquals(12L, created.getValue().getOrgId());
         assertEquals("TENANT", view.visibility());
+        assertEquals("OWNER", view.accessRole());
     }
 
     @Test
@@ -66,7 +67,8 @@ class KnowledgeBaseServiceTest {
         when(bases.countAdmin(3L, 7L, 11L)).thenReturn(1);
         KnowledgeBaseService service = new KnowledgeBaseService(bases, users, jdbc);
 
-        assertThrows(BusinessException.class, () -> service.grant(7L, 3L, 8L, "VIEWER"));
+        assertThrows(
+                BusinessException.class, () -> service.grant(7L, 3L, 8L, null, "VIEWER"));
     }
 
     private static AppUser user(long id, long tenantId, long orgId) {

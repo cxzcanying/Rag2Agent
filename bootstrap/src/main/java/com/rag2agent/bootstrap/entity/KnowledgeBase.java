@@ -1,6 +1,7 @@
 package com.rag2agent.bootstrap.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import java.time.Instant;
@@ -18,6 +19,8 @@ public class KnowledgeBase {
     private Long tenantId;
     private Long orgId;
     private String visibility;
+    @TableField(exist = false)
+    private String accessRole;
     private Instant createdAt;
     private Instant updatedAt;
 }
