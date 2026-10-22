@@ -11,9 +11,11 @@ import org.apache.ibatis.annotations.Update;
 public interface ToolCallRecordMapper {
 
     @Insert("""
-            INSERT INTO tool_call (run_id, step_id, tool_name, status, input, output, error_message)
+            INSERT INTO tool_call
+                (run_id, step_id, tool_name, status, input, approval_digest, output, error_message)
             VALUES (#{runId}, #{stepId}, #{toolName}, #{status},
                     CAST(#{input,jdbcType=VARCHAR} AS jsonb),
+                    #{approvalDigest},
                     CAST(#{output,jdbcType=VARCHAR} AS jsonb),
                     #{errorMessage})
             """)

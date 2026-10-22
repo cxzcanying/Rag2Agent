@@ -20,6 +20,7 @@ public class ToolCallRecord {
     private String toolName;
     private String status;
     private String input;
+    private String approvalDigest;
     private String output;
     private String errorMessage;
     private Instant createdAt;

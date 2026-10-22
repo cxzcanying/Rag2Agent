@@ -347,6 +347,15 @@ public class AgentRunService {
             updateStatus(runId, "FAILED");
             throw new BusinessException(ErrorCode.BAD_REQUEST, "待审批工具调用已被处理或不存在");
         }
+        String actualDigest = ApprovalDigest.compute(
+                runId, run.getUserId(), pending.getToolName(), pending.getInput());
+        if (!ApprovalDigest.matches(pending.getApprovalDigest(), actualDigest)) {
+            pending.setStatus("FAILED");
+            pending.setErrorMessage("审批操作摘要不一致");
+            toolCallMapper.updateResult(pending);
+            updateStatus(runId, "FAILED");
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "审批操作已变更，请重新发起请求");
+        }
 
         List<ChatMessage> messages = loadMessages(runId);
         List<Reference> references = loadReferences(runId);
@@ -469,6 +478,8 @@ public class AgentRunService {
                         pending.setRunId(runId);
                         pending.setToolName(toolCall.name());
                         pending.setInput(toolCall.arguments());
+                        pending.setApprovalDigest(ApprovalDigest.compute(
+                                runId, userId, toolCall.name(), toolCall.arguments()));
                         pending.setStatus("WAITING_APPROVAL");
                         toolCallMapper.insert(pending);
 
