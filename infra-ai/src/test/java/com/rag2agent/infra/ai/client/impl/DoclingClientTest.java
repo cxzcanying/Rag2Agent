@@ -32,7 +32,7 @@ class DoclingClientTest {
         server.start();
         DoclingProperties properties = new DoclingProperties();
         properties.setBaseUrl(server.url("/").toString());
-        properties.setOcrLanguages(List.of("zh-Hans"));
+        properties.setOcrLanguages(List.of("ch"));
         client = new DoclingClient(
                 properties, new AiResilienceProperties(), new SimpleMeterRegistry());
     }
@@ -78,6 +78,7 @@ class DoclingClientTest {
         assertEquals("/v1/convert/file", request.getPath());
         assertTrue(body.contains("name=\"to_formats\""));
         assertTrue(body.contains("name=\"ocr_lang\""));
+        assertTrue(body.contains("ch"));
         assertTrue(body.contains("rapidocr"));
         assertTrue(body.contains("accurate"));
     }

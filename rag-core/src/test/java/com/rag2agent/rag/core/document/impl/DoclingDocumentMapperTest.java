@@ -157,4 +157,56 @@ class DoclingDocumentMapperTest {
                 result.assets().getFirst().binary(), StandardCharsets.UTF_8));
         assertEquals(null, result.assets().getFirst().contentReference());
     }
+
+    @Test
+    void traversesNestedTextChildrenAndTablesFromHtml() throws Exception {
+        JsonNode document = mapper.readTree("""
+                {
+                  "schema_name": "DoclingDocument",
+                  "version": "1.0",
+                  "body": {"children": [
+                    {"$ref": "#/texts/0"},
+                    {"$ref": "#/texts/1"}
+                  ]},
+                  "texts": [
+                    {"self_ref": "#/texts/0", "label": "title", "text": "制度标题", "children": []},
+                    {
+                      "self_ref": "#/texts/1",
+                      "label": "title",
+                      "text": "制度标题",
+                      "children": [
+                        {"$ref": "#/texts/2"},
+                        {"$ref": "#/texts/3"},
+                        {"$ref": "#/tables/0"}
+                      ]
+                    },
+                    {"self_ref": "#/texts/2", "label": "text", "text": "高级工程师年假为 10 天", "children": []},
+                    {"self_ref": "#/texts/3", "label": "text", "text": "制度由星河科技发布", "children": []}
+                  ],
+                  "tables": [{
+                    "self_ref": "#/tables/0",
+                    "label": "table",
+                    "captions": [{"$ref": "#/texts/2"}],
+                    "children": [],
+                    "data": {"table_cells": [
+                      {"text": "职级", "start_row_offset_idx": 0, "start_col_offset_idx": 0, "column_header": true},
+                      {"text": "天数", "start_row_offset_idx": 0, "start_col_offset_idx": 1, "column_header": true},
+                      {"text": "高级工程师", "start_row_offset_idx": 1, "start_col_offset_idx": 0},
+                      {"text": "10 天", "start_row_offset_idx": 1, "start_col_offset_idx": 1}
+                    ]}
+                  }],
+                  "pictures": [],
+                  "groups": [],
+                  "pages": {}
+                }
+                """);
+
+        StructuredDocument result = new DoclingDocumentMapper().map("doc-html", document, "");
+
+        assertEquals(5, result.elements().size());
+        assertTrue(result.elements().stream().anyMatch(element -> element.text().contains("星河科技")));
+        assertEquals(1, result.tables().size());
+        assertEquals("职级=高级工程师；天数=10 天",
+                result.tables().getFirst().rows().getFirst().semanticText());
+    }
 }

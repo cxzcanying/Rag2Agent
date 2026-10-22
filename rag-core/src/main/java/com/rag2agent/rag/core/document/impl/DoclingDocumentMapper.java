@@ -14,6 +14,8 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.TreeMap;
 
 /**
@@ -100,7 +102,7 @@ public final class DoclingDocumentMapper {
     private static List<JsonNode> readingOrder(JsonNode document, Map<String, JsonNode> items) {
         List<JsonNode> ordered = new ArrayList<>();
         JsonNode children = document.path("body").path("children");
-        appendReadingOrder(children, items, ordered);
+        appendReadingOrder(children, items, ordered, new HashSet<>());
         if (ordered.isEmpty()) {
             ordered.addAll(items.values());
             ordered.removeIf(item -> text(item, "self_ref", "").startsWith("#/groups/"));
@@ -111,20 +113,24 @@ public final class DoclingDocumentMapper {
     }
 
     private static void appendReadingOrder(
-            JsonNode children, Map<String, JsonNode> items, List<JsonNode> ordered) {
+            JsonNode children,
+            Map<String, JsonNode> items,
+            List<JsonNode> ordered,
+            Set<String> visited) {
         if (!children.isArray()) {
             return;
         }
         for (JsonNode child : children) {
             String reference = text(child, "$ref", "");
             JsonNode item = items.get(reference);
-            if (item == null) {
+            if (item == null || !visited.add(reference)) {
                 continue;
             }
             if (reference.startsWith("#/groups/")) {
-                appendReadingOrder(item.path("children"), items, ordered);
+                appendReadingOrder(item.path("children"), items, ordered, visited);
             } else {
                 ordered.add(item);
+                appendReadingOrder(item.path("children"), items, ordered, visited);
             }
         }
     }

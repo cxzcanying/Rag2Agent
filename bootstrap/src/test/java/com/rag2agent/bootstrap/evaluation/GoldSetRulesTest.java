@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.CaseInput;
 import com.rag2agent.bootstrap.evaluation.EvaluationRepository.EvalCase;
 import java.util.List;
@@ -48,6 +49,16 @@ class GoldSetRulesTest {
         assertTrue(coverage.missingCategories().contains("GRAPH"));
         assertFalse(coverage.violations().isEmpty());
         assertFalse(coverage.valid());
+    }
+
+    @Test
+    void validFlagIsSerializedForFrontendGate() throws Exception {
+        var coverage = new com.rag2agent.bootstrap.dto.EvaluationDtos.GoldSetCoverage(
+                1, Map.of("RAG", 1), List.of(), List.of(), true);
+
+        String json = new ObjectMapper().writeValueAsString(coverage);
+
+        assertTrue(json.contains("\"valid\":true"));
     }
 
     private static CaseInput input(String type, Map<String, Object> evidence) {

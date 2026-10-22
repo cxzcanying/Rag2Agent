@@ -44,4 +44,28 @@ class TableContextExpanderTest {
         assertTrue(content.contains("[命中]"));
         assertEquals(3, expanded.metadata().get("neighborRowCount"));
     }
+
+    @Test
+    void labelsMissingPagesWithoutNullText() {
+        DocumentStructureRepository repository = mock(DocumentStructureRepository.class);
+        when(repository.findTable(7L, 2, "tables-0"))
+                .thenReturn(Optional.of(new TableRecord(
+                        "tables-0", "制度表", List.of("职级", "天数"), null, null, null)));
+        when(repository.findRowsAround(7L, 2, "tables-0", 1, 2)).thenReturn(List.of(
+                new RowRecord("r1", 1, List.of(), "职级=高级工程师；天数=10 天", null, null)));
+        RetrievalResult result = new RetrievalResult(
+                "chunk-1", "命中行", 0.9, Map.of(
+                        "contentType", "table_row",
+                        "documentId", 7,
+                        "version", 2,
+                        "tableId", "tables-0",
+                        "rowIndex", 1));
+
+        String content = (String) new TableContextExpander(repository)
+                .expand(result).metadata().get("expandedContent");
+
+        assertTrue(content.contains("页码范围：无分页信息"));
+        assertTrue(content.contains("（页码未知）"));
+        assertTrue(!content.contains("null"));
+    }
 }

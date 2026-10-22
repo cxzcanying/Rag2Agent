@@ -52,6 +52,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class HybridSearchService {
 
+    private static final int GRAPH_CANDIDATE_LIMIT = 4;
+
     private final JdbcTemplate jdbc;
     private final EmbeddingClient embeddingClient;
     private final RerankClient rerankClient;
@@ -156,7 +158,8 @@ public class HybridSearchService {
                             () -> Observation.createNotStarted("rag2agent.search.graph", observationRegistry)
                                     .lowCardinalityKeyValue("route", route.name().toLowerCase(Locale.ROOT))
                                     .observe(() -> graphRetriever.search(
-                                            kbId, query, options.candidateTopK())),
+                                            kbId, query,
+                                            Math.min(GRAPH_CANDIDATE_LIMIT, options.candidateTopK()))),
                             retrievalTaskExecutor)
                     : CompletableFuture.completedFuture(List.of());
         } catch (RejectedExecutionException exception) {

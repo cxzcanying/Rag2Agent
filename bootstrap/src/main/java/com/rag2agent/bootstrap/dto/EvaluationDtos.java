@@ -168,10 +168,6 @@ public final class EvaluationDtos {
             int totalCases,
             Map<String, Integer> caseCounts,
             List<String> missingCategories,
-            List<GoldSetViolation> violations) {
-
-        public boolean valid() {
-            return missingCategories.isEmpty() && violations.isEmpty();
-        }
-    }
+            List<GoldSetViolation> violations,
+            boolean valid) {}
 }

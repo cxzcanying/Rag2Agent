@@ -53,7 +53,13 @@ public final class GoldSetRules {
                 .filter(entry -> entry.getValue() == 0)
                 .map(Map.Entry::getKey)
                 .toList();
-        return new GoldSetCoverage(cases.size(), Map.copyOf(counts), missing, List.copyOf(violations));
+        List<GoldSetViolation> immutableViolations = List.copyOf(violations);
+        return new GoldSetCoverage(
+                cases.size(),
+                Map.copyOf(counts),
+                missing,
+                immutableViolations,
+                missing.isEmpty() && immutableViolations.isEmpty());
     }
 
     private static String evidenceError(String type, Map<String, Object> evidence) {

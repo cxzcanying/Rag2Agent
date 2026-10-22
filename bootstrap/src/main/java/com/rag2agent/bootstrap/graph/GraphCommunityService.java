@@ -36,7 +36,12 @@ public class GraphCommunityService {
                     List.of(
                             new ChatMessage("system",
                                     "你是企业图谱摘要器。根据实体列表生成简洁主题摘要，不补充列表外事实。"),
-                            new ChatMessage("user", String.join("、", community.entities()))),
+                            new ChatMessage("user", """
+                                    实体列表（只允许使用以下实体）：
+                                    %s
+
+                                    请生成一段不超过 200 字的主题摘要。
+                                    """.formatted("- " + String.join("\n- ", community.entities())))),
                     Map.of("max_tokens", 500, "temperature", 0.1)));
             if (response != null && response.content() != null && !response.content().isBlank()) {
                 repository.saveCommunitySummary(

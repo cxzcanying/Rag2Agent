@@ -140,7 +140,7 @@ rag2agent:
       table-mode: ${RAG2AGENT_DOCLING_TABLE_MODE:accurate}
       ocr-preset: ${RAG2AGENT_DOCLING_OCR_PRESET:rapidocr}
       ocr-languages:
-        - ${RAG2AGENT_DOCLING_OCR_LANGUAGE_1:zh-Hans}
+        - ${RAG2AGENT_DOCLING_OCR_LANGUAGE_1:ch}
         - ${RAG2AGENT_DOCLING_OCR_LANGUAGE_2:en}
     cost:
       prices:

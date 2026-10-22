@@ -19,9 +19,12 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class OpenAiVisionClient implements VisionClient {
 
+    private static final Logger log = LoggerFactory.getLogger(OpenAiVisionClient.class);
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
     private final ObjectMapper mapper = new ObjectMapper();
@@ -89,6 +92,10 @@ public class OpenAiVisionClient implements VisionClient {
             return new VisionResult(text, providerName, model);
         } catch (IOException exception) {
             throw new AiClientException("Vision 调用失败: " + exception.getMessage(), exception);
+        } catch (AiClientException exception) {
+            log.warn("Vision 调用失败: provider={}, model={}, status={}, reason={}",
+                    providerName, model, exception.statusCode(), exception.getMessage());
+            throw exception;
         }
     }
 }

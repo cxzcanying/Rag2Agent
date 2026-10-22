@@ -154,19 +154,30 @@ public class KnowledgeGraphRepository {
         String graphName = "rag2agent-kb-" + kbId;
         try (var session = session()) {
             session.executeWriteWithoutResult(tx -> {
+                tx.run("""
+                        MATCH (c:Community {kb_id: $kbId})
+                        DETACH DELETE c
+                        """, Map.of("kbId", kbId));
                 tx.run("CALL gds.graph.drop($graphName, false)", Map.of("graphName", graphName));
                 tx.run("""
                         CALL gds.graph.project.cypher(
                           $graphName,
                           'MATCH (e:Entity {kb_id: $kbId}) RETURN id(e) AS id',
                           'MATCH (a:Entity {kb_id: $kbId})-[r:RELATED]-(b:Entity {kb_id: $kbId}) ' +
-                          'RETURN id(a) AS source, id(b) AS target, coalesce(r.confidence, 0.0) AS weight',
+                          'RETURN id(a) AS source, id(b) AS target, type(r) AS type, r.confidence AS weight',
                           {parameters: {kbId: $kbId}}
                         )
                         """, Map.of("graphName", graphName, "kbId", kbId));
                 tx.run("""
+                        CALL gds.graph.relationships.toUndirected($graphName, {
+                          relationshipType: 'RELATED',
+                          mutateRelationshipType: 'RELATED_UNDIRECTED'
+                        })
+                        """, Map.of("graphName", graphName));
+                tx.run("""
                         CALL gds.leiden.write($graphName, {
                           writeProperty: 'communityId',
+                          relationshipTypes: ['RELATED_UNDIRECTED'],
                           relationshipWeightProperty: 'weight'
                         })
                         """, Map.of("graphName", graphName));

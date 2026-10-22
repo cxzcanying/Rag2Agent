@@ -41,12 +41,12 @@ public class TableContextExpander {
         content.append("表标题：").append(table.title() == null || table.title().isBlank()
                 ? tableId : table.title()).append('\n');
         content.append("表头：").append(String.join(" | ", table.headers())).append('\n');
-        content.append("页码范围：").append(table.pageFrom()).append('-').append(table.pageTo()).append('\n');
+        content.append("页码范围：").append(pageRange(table.pageFrom(), table.pageTo())).append('\n');
         content.append("相关行：\n");
         for (RowRecord row : rows) {
             content.append(row.rowIndex() == rowIndex ? "-> " : "   ")
                     .append(row.semanticText())
-                    .append("（第").append(row.pageNo()).append("页）");
+                    .append("（").append(pageLabel(row.pageNo())).append("）");
             if (row.rowIndex() == rowIndex) {
                 content.append(" [命中]");
             }
@@ -69,5 +69,19 @@ public class TableContextExpander {
 
     private String string(Object value) {
         return value instanceof String text && !text.isBlank() ? text : null;
+    }
+
+    private String pageRange(Integer from, Integer to) {
+        if (from == null && to == null) {
+            return "无分页信息";
+        }
+        if (from == null || to == null || from.equals(to)) {
+            return pageLabel(from == null ? to : from);
+        }
+        return "第" + from + "-" + to + "页";
+    }
+
+    private String pageLabel(Integer page) {
+        return page == null ? "页码未知" : "第" + page + "页";
     }
 }

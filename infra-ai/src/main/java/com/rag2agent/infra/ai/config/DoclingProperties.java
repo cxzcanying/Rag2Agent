@@ -15,7 +15,7 @@ public class DoclingProperties {
     private int writeTimeoutSeconds = 60;
     private String tableMode = "accurate";
     private String ocrPreset = "rapidocr";
-    private List<String> ocrLanguages = new ArrayList<>(List.of("zh-Hans", "en"));
+    private List<String> ocrLanguages = new ArrayList<>(List.of("ch", "en"));
 
     public boolean isEnabled() {
         return enabled;
