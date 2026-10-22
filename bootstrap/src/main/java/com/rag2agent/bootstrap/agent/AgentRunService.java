@@ -40,6 +40,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import org.springframework.dao.DuplicateKeyException;
@@ -99,6 +100,7 @@ public class AgentRunService {
     private final ContextCompactor contextCompactor;
     private final KnowledgeBaseService knowledgeBaseService;
     private final TokenCostService tokenCostService;
+    private final AgentEventStore agentEventStore;
 
     @org.springframework.beans.factory.annotation.Autowired
     public AgentRunService(
@@ -115,7 +117,8 @@ public class AgentRunService {
             ObservationRegistry observationRegistry,
             AgentProperties agentProperties,
             KnowledgeBaseService knowledgeBaseService,
-            TokenCostService tokenCostService) {
+            TokenCostService tokenCostService,
+            AgentEventStore agentEventStore) {
         this.chatClient = chatClient;
         this.searchService = searchService;
         this.toolRegistry = toolRegistry;
@@ -131,6 +134,7 @@ public class AgentRunService {
         this.contextCompactor = new ContextCompactor(agentProperties.getSummaryMaxChars());
         this.knowledgeBaseService = knowledgeBaseService;
         this.tokenCostService = tokenCostService;
+        this.agentEventStore = agentEventStore;
     }
 
     public AgentRunService(
@@ -141,7 +145,7 @@ public class AgentRunService {
             AgentProperties agentProperties, KnowledgeBaseService knowledgeBaseService) {
         this(chatClient, searchService, toolRegistry, toolExecutor, runMapper, stepMapper, toolCallMapper,
                 objectMapper, redis, meterRegistry, observationRegistry, agentProperties,
-                knowledgeBaseService, null);
+                knowledgeBaseService, null, null);
     }
 
     /**
@@ -276,6 +280,10 @@ public class AgentRunService {
             }
             throw exception;
         }
+        if (agentEventStore != null) {
+            agentEventStore.ensureSession(userId, sessionId);
+            onEvent = durableEvents(run.getId(), userId, sessionId, onEvent);
+        }
         onEvent.accept(new AgentEvent("run", Map.of("runId", run.getId())));
 
         List<ChatMessage> messages = new ArrayList<>();
@@ -327,6 +335,10 @@ public class AgentRunService {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "该审批已被处理或执行状态已变化");
         }
         run.setStatus("EXECUTING");
+        if (agentEventStore != null) {
+            agentEventStore.ensureSession(run.getUserId(), run.getSessionId());
+            onEvent = durableEvents(runId, run.getUserId(), run.getSessionId(), onEvent);
+        }
         ToolCallRecord pending = toolCallMapper.listByRunId(runId).stream()
                 .filter(call -> "WAITING_APPROVAL".equals(call.getStatus()))
                 .findFirst()
@@ -770,6 +782,23 @@ public class AgentRunService {
                 .tag("status", status)
                 .register(meterRegistry)
                 .increment();
+    }
+
+    private Consumer<AgentEvent> durableEvents(
+            Long runId, Long userId, String sessionId, Consumer<AgentEvent> sink) {
+        AtomicLong lastSeq = new AtomicLong();
+        return event -> {
+            long seq = agentEventStore.append(
+                    runId, userId, sessionId, event.type(), event.data());
+            lastSeq.set(seq);
+            if ("done".equals(event.type()) || "error".equals(event.type())) {
+                agentEventStore.checkpoint(runId, sessionId, lastSeq.get(), Map.of(
+                        "lastEventType", event.type(),
+                        "terminal", true,
+                        "data", event.data() == null ? Map.of() : event.data()));
+            }
+            sink.accept(event);
+        };
     }
 
     private String resolveReasoningEffort(List<ChatMessage> messages) {
