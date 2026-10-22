@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.time.Instant;
+import java.util.List;
 
 public final class AgentDtos {
 
@@ -31,4 +32,15 @@ public final class AgentDtos {
                     event.id(), event.runId(), event.seq(), event.type(), payload, event.createdAt());
         }
     }
+
+    public record TeamResearchRequest(
+            @NotNull(message = "kbId 不能为空") Long kbId,
+            @NotBlank(message = "query 不能为空")
+            @Size(max = 12000, message = "query 不能超过 12000 个字符") String query) {}
+
+    public record TeamResearchResponse(
+            Long runId,
+            String status,
+            String answer,
+            List<com.rag2agent.bootstrap.agent.Reference> references) {}
 }

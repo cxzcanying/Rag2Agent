@@ -7,9 +7,12 @@ import com.rag2agent.bootstrap.agent.AgentExecutionResult;
 import com.rag2agent.bootstrap.agent.AgentEventStore;
 import com.rag2agent.bootstrap.agent.AgentRunService;
 import com.rag2agent.bootstrap.agent.AgentTaskService;
+import com.rag2agent.bootstrap.agent.MultiAgentResearchService;
 import com.rag2agent.bootstrap.dto.AgentDtos.ApprovalRequest;
 import com.rag2agent.bootstrap.dto.AgentDtos.ChatRequest;
 import com.rag2agent.bootstrap.dto.AgentDtos.PersistedAgentEvent;
+import com.rag2agent.bootstrap.dto.AgentDtos.TeamResearchRequest;
+import com.rag2agent.bootstrap.dto.AgentDtos.TeamResearchResponse;
 import com.rag2agent.framework.common.ApiResponse;
 import com.rag2agent.infra.ai.exception.AiClientException;
 import jakarta.validation.Valid;
@@ -47,17 +50,20 @@ public class AgentController {
     private final AgentEventReplayStore eventStore;
     private final AgentEventStore durableEventStore;
     private final AgentTaskService taskService;
+    private final MultiAgentResearchService multiAgentResearchService;
 
     public AgentController(AgentRunService agentRunService, ObjectMapper objectMapper, Tracer tracer,
             AgentEventReplayStore eventStore,
             AgentEventStore durableEventStore,
-            AgentTaskService taskService) {
+            AgentTaskService taskService,
+            MultiAgentResearchService multiAgentResearchService) {
         this.agentRunService = agentRunService;
         this.objectMapper = objectMapper;
         this.tracer = tracer;
         this.eventStore = eventStore;
         this.durableEventStore = durableEventStore;
         this.taskService = taskService;
+        this.multiAgentResearchService = multiAgentResearchService;
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -198,6 +204,13 @@ public class AgentController {
     public ApiResponse<java.util.List<AgentTaskService.AgentTask>> tasks(@PathVariable Long runId) {
         agentRunService.getRun(StpUtil.getLoginIdAsLong(), runId);
         return ApiResponse.success(taskService.list(runId));
+    }
+
+    @PostMapping("/agent/teams/research")
+    public ApiResponse<TeamResearchResponse> teamResearch(
+            @RequestBody @Valid TeamResearchRequest request) {
+        return ApiResponse.success(
+                multiAgentResearchService.research(StpUtil.getLoginIdAsLong(), request));
     }
 
     private void sendEvent(PrintWriter writer, AgentEvent event) {

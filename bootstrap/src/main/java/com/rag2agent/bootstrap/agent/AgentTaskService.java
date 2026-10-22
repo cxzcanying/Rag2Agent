@@ -74,6 +74,14 @@ public class AgentTaskService {
                 """, (rs, rowNum) -> map(rs), runId, limit, assignee);
     }
 
+    public int start(Long taskId, String assignee) {
+        return jdbc.update("""
+                UPDATE agent_task
+                SET status = 'RUNNING', assignee = ?, started_at = now(), updated_at = now()
+                WHERE id = ? AND status = 'PENDING'
+                """, assignee, taskId);
+    }
+
     public List<AgentTask> list(Long runId) {
         return jdbc.query(
                 "SELECT * FROM agent_task WHERE run_id = ? ORDER BY id",

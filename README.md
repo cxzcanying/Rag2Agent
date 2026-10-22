@@ -228,6 +228,7 @@ GET  /api/agent/sessions/{sessionId}/events?afterSeq={seq}&limit={limit}
 GET  /api/agent/runs/{runId}/tasks
 GET  /api/agent/memories?kbId={kbId}&limit={limit}
 DELETE /api/agent/memories/{memoryId}
+POST /api/agent/teams/research
 
 POST /api/evaluations/cases/import
 POST /api/evaluations/runs
