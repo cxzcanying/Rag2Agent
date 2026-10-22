@@ -421,7 +421,8 @@ Neo4j 关系：
 
 - 已落地 Docling HTTP 客户端、DoclingDocument 元素/表格/资产映射、多格式上传白名单和 PDFBox 降级。
 - 已新增文档元素、逻辑表格、表格行和资产版本化表及持久化仓储。
-- 待完成 Docling sidecar Compose 服务、真实多格式样例验收、图片二进制资产入库和端到端故障演练。
+- 已新增 Docling Serve CPU sidecar Compose 服务、本机端口绑定、健康检查和独立 `docling` profile。
+- 待完成真实多格式样例验收、图片二进制资产入库和端到端故障演练。
 
 ### Phase 2：表格与分页完整性
 

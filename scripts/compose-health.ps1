@@ -1,8 +1,9 @@
 [CmdletBinding()]
-param([switch]$Full)
+param([switch]$Full, [switch]$Docling)
 
 $composeArgs = @()
 if ($Full) { $composeArgs += @("--profile", "full") }
+if ($Docling) { $composeArgs += @("--profile", "docling") }
 $composeArgs += @("ps", "--format", "json")
 
 try {
@@ -23,7 +24,7 @@ if ($raw) {
     catch { Write-Error "Docker Compose 返回了无法解析的状态：$raw"; exit 1 }
 }
 if ($services.Count -eq 0) {
-    Write-Host "没有正在运行的 Compose 服务。执行 docker compose up -d（完整拓扑加 -Full）。"
+    Write-Host "没有正在运行的 Compose 服务。执行 docker compose up -d（完整拓扑加 -Full，文档智能加 -Docling）。"
     exit 0
 }
 

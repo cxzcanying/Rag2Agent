@@ -50,6 +50,30 @@ services:
       timeout: 5s
       retries: 5
 
+  docling:
+    profiles: ["docling", "full"]
+    image: ${RAG2AGENT_DOCLING_IMAGE:-quay.io/docling-project/docling-serve-cpu:v1.36.0}
+    container_name: rag2agent-docling
+    ports:
+      - "127.0.0.1:15001:5001"
+    environment:
+      DOCLING_SERVE_ENABLE_UI: ${DOCLING_SERVE_ENABLE_UI:-false}
+    mem_limit: ${RAG2AGENT_DOCLING_MEMORY_LIMIT:-6g}
+    cpus: ${RAG2AGENT_DOCLING_CPUS:-4.0}
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:5001/ready', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
   rocketmq-namesrv:
     profiles: ["full"]
     image: apache/rocketmq:5.3.2

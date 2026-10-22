@@ -115,7 +115,7 @@ rag2agent:
   ai:
     docling:
       enabled: ${RAG2AGENT_DOCLING_ENABLED:false}
-      base-url: ${RAG2AGENT_DOCLING_BASE_URL:http://localhost:5001}
+      base-url: ${RAG2AGENT_DOCLING_BASE_URL:http://localhost:15001}
       endpoint: ${RAG2AGENT_DOCLING_ENDPOINT:/v1/convert/file}
       connect-timeout-seconds: ${RAG2AGENT_DOCLING_CONNECT_TIMEOUT_SECONDS:10}
       read-timeout-seconds: ${RAG2AGENT_DOCLING_READ_TIMEOUT_SECONDS:180}

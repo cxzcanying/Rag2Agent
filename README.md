@@ -189,12 +189,12 @@ ROCKETMQ_NAMESRV=localhost:19876
 RAG2AGENT_EMBEDDING_CACHE_ENABLED=true
 RAG2AGENT_RATE_LIMIT=60
 RAG2AGENT_DOCLING_ENABLED=false
-RAG2AGENT_DOCLING_BASE_URL=http://localhost:5001
+RAG2AGENT_DOCLING_BASE_URL=http://localhost:15001
 ```
 
 `RAG2AGENT_MQ_ENABLED`、`RAG2AGENT_CHINESE_SEARCH_MODE`、`RAG2AGENT_EMBEDDING_*`、`RAG2AGENT_RATE_LIMIT_*`、`RAG2AGENT_AI_RESILIENCE_*`、`RAG2AGENT_MCP_REMOTE_*`、`RAG2AGENT_DOCLING_*` 等均可在 `.env` 或环境变量中覆盖，默认值见 `bootstrap/src/main/resources/application.yml`。价格相关变量以 `DEEPSEEK_*_PRICE_*` / `SILICONFLOW_*_PRICE_*` 前缀为主，默认使用官方分时 / 免费用量口径。
 
-Docling 默认关闭；启用后需单独运行 `docling-serve`，可解析非 PDF 文档、扫描件并提供表格结构。解析结果中的元素、表格、表格行和资产会随文档版本写入 `009_document_intelligence.sql` 创建的结构表。
+Docling 默认关闭；执行 `docker compose --profile docling up -d` 后开启 `RAG2AGENT_DOCLING_ENABLED=true`，即可解析非 PDF 文档、扫描件并提供表格结构。sidecar 仅绑定本机 `15001` 端口，解析结果中的元素、表格、表格行和资产会随文档版本写入 `009_document_intelligence.sql` 创建的结构表。
 
 接口限流为惰性令牌桶：`RAG2AGENT_RATE_LIMIT` 作为桶容量，`RAG2AGENT_RATE_LIMIT_WINDOW_SECONDS` 作为补充窗口，实际每秒补速率 = 容量 / 窗口秒（默认 60 / 60 = 1 个/秒，允许受控突发）；登录失败锁定仍为固定窗口计数。
 
