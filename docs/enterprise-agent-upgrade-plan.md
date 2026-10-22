@@ -522,6 +522,13 @@ Neo4j 关系：
 - 单个 Worker 失败可隔离或重试。
 - 记忆与 Skill 均受租户、权限和版本约束。
 
+当前进度：
+
+- 已新增 PostgreSQL + pgvector 长期记忆表，支持用户/知识库作用域、来源、置信度和 TTL。
+- 已提供 `search_agent_memory` 只读工具和需要人工审批的 `save_agent_memory` 写入工具。
+- 记忆检索强制按用户过滤，知识库记忆在工具入口校验 owner。
+- 待完成记忆冲突、纠正、删除 API、自动候选提取、多 Agent 编排和 Skill 注册。
+
 ### Phase 7：企业治理与发布
 
 交付：
