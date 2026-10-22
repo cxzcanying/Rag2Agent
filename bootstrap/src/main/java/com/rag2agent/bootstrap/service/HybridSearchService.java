@@ -60,6 +60,7 @@ public class HybridSearchService {
     private final QueryEmbeddingCache queryEmbeddingCache;
     private final RetrievalProperties retrievalProperties;
     private final ObjectMapper objectMapper;
+    private final TableContextExpander tableContextExpander;
 
     /**
      * 三个依赖的分工：
@@ -75,7 +76,8 @@ public class HybridSearchService {
             @Qualifier("retrievalTaskExecutor") Executor retrievalTaskExecutor,
             QueryEmbeddingCache queryEmbeddingCache,
             RetrievalProperties retrievalProperties,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            TableContextExpander tableContextExpander) {
         this.jdbc = jdbc;
         this.embeddingClient = embeddingClient;
         this.rerankClient = rerankClient;
@@ -85,6 +87,7 @@ public class HybridSearchService {
         this.queryEmbeddingCache = queryEmbeddingCache;
         this.retrievalProperties = retrievalProperties;
         this.objectMapper = objectMapper;
+        this.tableContextExpander = tableContextExpander;
     }
 
     public List<RetrievalResult> search(Long kbId, String query, int topK) {
@@ -163,15 +166,16 @@ public class HybridSearchService {
             return List.of();
         }
         if (!options.rerankEnabled()) {
-            return fused.stream().limit(options.topK()).toList();
+            return expandTableContext(fused.stream().limit(options.topK()).toList());
         }
         // 精排：用 cross-encoder 对融合后的候选重新打分，取 topK
-        return Observation.createNotStarted("rag2agent.search.rerank", observationRegistry)
+        List<RetrievalResult> reranked = Observation.createNotStarted("rag2agent.search.rerank", observationRegistry)
                 .lowCardinalityKeyValue("enabled", "true")
                 .observe(() -> rerank(query, fused, options.topK())).stream()
                 .filter(result -> options.rerankMinScore() == null
                         || result.score() >= options.rerankMinScore())
                 .toList();
+        return expandTableContext(reranked);
     }
 
     private String metricStrategy(SearchOptions options) {
@@ -447,5 +451,12 @@ public class HybridSearchService {
         }
         return new RetrievalResult(
                 rs.getString("id"), rs.getString("content"), rs.getDouble("score"), metadata);
+    }
+
+    private List<RetrievalResult> expandTableContext(List<RetrievalResult> results) {
+        if (tableContextExpander == null) {
+            return results;
+        }
+        return results.stream().map(tableContextExpander::expand).toList();
     }
 }

@@ -26,6 +26,7 @@ public final class TableChunkBuilder {
                 metadata.put("contentType", "table_row");
                 metadata.put("tableId", table.id());
                 metadata.put("rowId", row.id());
+                metadata.put("rowIndex", row.ordinal());
                 if (row.page() != null) {
                     metadata.put("pageNumber", row.page());
                 }

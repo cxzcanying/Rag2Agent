@@ -554,11 +554,14 @@ public class AgentRunService {
             Long runId, Long kbId, String query, Consumer<AgentEvent> onEvent) {
         List<RetrievalResult> results = searchService.search(kbId, query, DEFAULT_TOP_K);
         List<Reference> references = results.stream()
-                .map(result -> new Reference(
-                        ((Number) result.metadata().getOrDefault("documentId", 0)).longValue(),
-                        (Integer) result.metadata().getOrDefault("chunkIndex", 0),
-                        result.content(),
-                        result.metadata()))
+                .map(result -> {
+                    Object expanded = result.metadata().get("expandedContent");
+                    return new Reference(
+                            ((Number) result.metadata().getOrDefault("documentId", 0)).longValue(),
+                            (Integer) result.metadata().getOrDefault("chunkIndex", 0),
+                            expanded instanceof String text ? text : result.content(),
+                            result.metadata());
+                })
                 .toList();
         onEvent.accept(new AgentEvent("reference", references));
 

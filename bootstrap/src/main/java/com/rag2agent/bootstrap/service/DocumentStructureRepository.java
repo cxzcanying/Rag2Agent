@@ -168,6 +168,27 @@ public class DocumentStructureRepository {
                 documentId, version, tableId, afterRowIndex, limit);
     }
 
+    public List<RowRecord> findRowsAround(
+            Long documentId, int version, String tableId, int rowIndex, int radius) {
+        int from = Math.max(0, rowIndex - radius);
+        int to = rowIndex + radius;
+        return jdbc.query("""
+                SELECT row_id, row_index, CAST(cells AS text) AS cells, semantic_text,
+                       page_no, CAST(bbox AS text) AS bbox
+                FROM document_table_row
+                WHERE document_id = ? AND version = ? AND table_id = ?
+                  AND row_index BETWEEN ? AND ?
+                ORDER BY row_index
+                """, (rs, rowNum) -> new RowRecord(
+                        rs.getString("row_id"),
+                        rs.getInt("row_index"),
+                        stringList(rs.getString("cells")),
+                        rs.getString("semantic_text"),
+                        rs.getObject("page_no", Integer.class),
+                        boundingBox(rs.getString("bbox"))),
+                documentId, version, tableId, from, to);
+    }
+
     private List<String> stringList(String json) {
         try {
             return mapper.readValue(json, mapper.getTypeFactory()
