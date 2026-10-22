@@ -2,6 +2,7 @@ package com.rag2agent.bootstrap.dto;
 
 import com.rag2agent.bootstrap.dto.TableDtos.BoundingBoxView;
 import com.rag2agent.bootstrap.service.DocumentStructureRepository.AssetRecord;
+import jakarta.validation.constraints.NotBlank;
 
 public final class AssetDtos {
 
@@ -36,4 +37,10 @@ public final class AssetDtos {
                     expiresInSeconds);
         }
     }
+
+    public record DescribeAssetRequest(
+            @NotBlank(message = "prompt 不能为空") String prompt) {}
+
+    public record DescribeAssetResponse(
+            String assetId, String answer, String provider, String model) {}
 }

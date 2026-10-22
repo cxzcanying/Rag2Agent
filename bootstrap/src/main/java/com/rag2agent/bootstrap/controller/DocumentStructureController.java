@@ -3,6 +3,8 @@ package com.rag2agent.bootstrap.controller;
 import cn.dev33.satoken.stp.StpUtil;
 import com.rag2agent.bootstrap.dto.DocumentStructureDtos.ElementPage;
 import com.rag2agent.bootstrap.dto.AssetDtos.AssetView;
+import com.rag2agent.bootstrap.dto.AssetDtos.DescribeAssetRequest;
+import com.rag2agent.bootstrap.dto.AssetDtos.DescribeAssetResponse;
 import com.rag2agent.bootstrap.dto.TableDtos.TablePage;
 import com.rag2agent.bootstrap.service.DocumentElementQueryService;
 import com.rag2agent.bootstrap.service.DocumentAssetService;
@@ -11,8 +13,11 @@ import com.rag2agent.framework.common.ApiResponse;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.PostMapping;
+import jakarta.validation.Valid;
 
 @RestController
 @RequestMapping("/api/documents/{documentId}")
@@ -59,5 +64,15 @@ public class DocumentStructureController {
             @RequestParam(value = "version", required = false) Integer version) {
         return ApiResponse.success(assetService.presign(
                 StpUtil.getLoginIdAsLong(), documentId, assetId, version));
+    }
+
+    @PostMapping("/assets/{assetId}/describe")
+    public ApiResponse<DescribeAssetResponse> describeAsset(
+            @PathVariable("documentId") Long documentId,
+            @PathVariable("assetId") String assetId,
+            @RequestParam(value = "version", required = false) Integer version,
+            @RequestBody @Valid DescribeAssetRequest request) {
+        return ApiResponse.success(assetService.describe(
+                StpUtil.getLoginIdAsLong(), documentId, assetId, version, request.prompt()));
     }
 }

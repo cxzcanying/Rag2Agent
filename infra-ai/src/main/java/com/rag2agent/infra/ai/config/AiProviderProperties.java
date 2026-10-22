@@ -11,6 +11,7 @@ public class AiProviderProperties {
     private String activeChatProvider = "deepseek";
     private String activeEmbeddingProvider = "siliconflow";
     private String activeRerankProvider = "siliconflow";
+    private String activeVisionProvider = "qwen-vl";
 
     public List<Provider> getProviders() {
         return providers;
@@ -44,6 +45,14 @@ public class AiProviderProperties {
         this.activeRerankProvider = activeRerankProvider;
     }
 
+    public String getActiveVisionProvider() {
+        return activeVisionProvider;
+    }
+
+    public void setActiveVisionProvider(String activeVisionProvider) {
+        this.activeVisionProvider = activeVisionProvider;
+    }
+
     public static class Provider {
 
         private String name;
@@ -55,6 +64,7 @@ public class AiProviderProperties {
         private String chatModelPro;
         private String embeddingModel;
         private String rerankModel;
+        private String visionModel;
 
         public String getName() {
             return name;
@@ -126,6 +136,14 @@ public class AiProviderProperties {
 
         public void setRerankModel(String rerankModel) {
             this.rerankModel = rerankModel;
+        }
+
+        public String getVisionModel() {
+            return visionModel;
+        }
+
+        public void setVisionModel(String visionModel) {
+            this.visionModel = visionModel;
         }
     }
 }

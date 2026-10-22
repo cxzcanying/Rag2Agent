@@ -174,6 +174,7 @@ rag2agent:
     active-chat-provider: ${RAG2AGENT_ACTIVE_CHAT_PROVIDER:deepseek}
     active-embedding-provider: ${RAG2AGENT_ACTIVE_EMBEDDING_PROVIDER:siliconflow}
     active-rerank-provider: ${RAG2AGENT_ACTIVE_RERANK_PROVIDER:siliconflow}
+    active-vision-provider: ${RAG2AGENT_ACTIVE_VISION_PROVIDER:qwen-vl}
     resilience:
       enabled: ${RAG2AGENT_AI_RESILIENCE_ENABLED:true}
       max-attempts: ${RAG2AGENT_AI_MAX_ATTEMPTS:3}
@@ -201,3 +202,10 @@ rag2agent:
           - rerank
         embedding-model: ${SILICONFLOW_EMBEDDING_MODEL:BAAI/bge-m3}
         rerank-model: ${SILICONFLOW_RERANK_MODEL:BAAI/bge-reranker-v2-m3}
+      - name: qwen-vl
+        base-url: ${QWEN_VL_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+        api-key: ${DASHSCOPE_API_KEY:}
+        enabled: ${RAG2AGENT_QWEN_VL_ENABLED:false}
+        capabilities:
+          - vision
+        vision-model: ${QWEN_VL_MODEL:qwen3-vl-flash}

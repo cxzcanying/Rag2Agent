@@ -193,6 +193,9 @@ RAG2AGENT_DOCLING_BASE_URL=http://localhost:15001
 RAG2AGENT_REASONING_EFFORT=off
 RAG2AGENT_NEO4J_ENABLED=false
 RAG2AGENT_NEO4J_URI=bolt://localhost:17687
+RAG2AGENT_QWEN_VL_ENABLED=false
+QWEN_VL_MODEL=qwen3-vl-flash
+DASHSCOPE_API_KEY=
 ```
 
 `RAG2AGENT_MQ_ENABLED`、`RAG2AGENT_CHINESE_SEARCH_MODE`、`RAG2AGENT_EMBEDDING_*`、`RAG2AGENT_RATE_LIMIT_*`、`RAG2AGENT_AI_RESILIENCE_*`、`RAG2AGENT_MCP_REMOTE_*`、`RAG2AGENT_DOCLING_*` 等均可在 `.env` 或环境变量中覆盖，默认值见 `bootstrap/src/main/resources/application.yml`。价格相关变量以 `DEEPSEEK_*_PRICE_*` / `SILICONFLOW_*_PRICE_*` 前缀为主，默认使用官方分时 / 免费用量口径。
@@ -221,6 +224,7 @@ POST /api/documents/{id}/reingest
 GET  /api/documents/{documentId}/elements?version={version}&cursor={cursor}&limit={limit}
 GET  /api/documents/{documentId}/tables/{tableId}/rows?version={version}&cursor={cursor}&limit={limit}
 GET  /api/documents/{documentId}/assets/{assetId}?version={version}
+POST /api/documents/{documentId}/assets/{assetId}/describe?version={version}
 GET  /api/search?kbId={kbId}&query={query}&topK={topK}
 
 POST /api/chat                         # SSE

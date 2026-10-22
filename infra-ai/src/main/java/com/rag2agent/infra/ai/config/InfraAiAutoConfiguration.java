@@ -4,10 +4,13 @@ import com.rag2agent.infra.ai.client.ChatModelClient;
 import com.rag2agent.infra.ai.client.DocumentIntelligenceClient;
 import com.rag2agent.infra.ai.client.EmbeddingClient;
 import com.rag2agent.infra.ai.client.RerankClient;
+import com.rag2agent.infra.ai.client.VisionClient;
 import com.rag2agent.infra.ai.client.impl.OpenAiChatModelClient;
 import com.rag2agent.infra.ai.client.impl.DoclingClient;
 import com.rag2agent.infra.ai.client.impl.OpenAiEmbeddingClient;
 import com.rag2agent.infra.ai.client.impl.OpenAiRerankClient;
+import com.rag2agent.infra.ai.client.impl.NoopVisionClient;
+import com.rag2agent.infra.ai.client.impl.OpenAiVisionClient;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -57,5 +60,16 @@ public class InfraAiAutoConfiguration {
             AiResilienceProperties resilience,
             MeterRegistry meterRegistry) {
         return new DoclingClient(properties, resilience, meterRegistry);
+    }
+
+    @Bean
+    public VisionClient visionClient(
+            AiProviderRegistry providers,
+            AiResilienceProperties resilience,
+            MeterRegistry meterRegistry) {
+        return providers.findActive("vision")
+                .map(provider -> (VisionClient) new OpenAiVisionClient(
+                        provider, resilience, meterRegistry))
+                .orElseGet(NoopVisionClient::new);
     }
 }

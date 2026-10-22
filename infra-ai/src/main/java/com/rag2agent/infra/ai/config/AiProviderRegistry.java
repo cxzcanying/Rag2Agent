@@ -3,6 +3,7 @@ package com.rag2agent.infra.ai.config;
 import com.rag2agent.infra.ai.config.AiProviderProperties.Provider;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 /** 按能力解析当前启用的 OpenAI-compatible provider。 */
 public class AiProviderRegistry {
@@ -18,6 +19,7 @@ public class AiProviderRegistry {
             case "chat" -> properties.getActiveChatProvider();
             case "embedding" -> properties.getActiveEmbeddingProvider();
             case "rerank" -> properties.getActiveRerankProvider();
+            case "vision" -> properties.getActiveVisionProvider();
             default -> throw new IllegalArgumentException("不支持的 AI capability: " + capability);
         };
         List<Provider> configured = properties.getProviders() == null ? List.of() : properties.getProviders();
@@ -36,6 +38,7 @@ public class AiProviderRegistry {
             case "chat" -> selected.getChatModel();
             case "embedding" -> selected.getEmbeddingModel();
             case "rerank" -> selected.getRerankModel();
+            case "vision" -> selected.getVisionModel();
             default -> null;
         };
         if (selected.getBaseUrl() == null || selected.getBaseUrl().isBlank()
@@ -44,5 +47,25 @@ public class AiProviderRegistry {
                     "AI provider 缺少 base-url 或默认模型: " + providerName + "（capability: " + capability + "）");
         }
         return selected;
+    }
+
+    public Optional<Provider> findActive(String capability) {
+        String providerName = switch (capability) {
+            case "chat" -> properties.getActiveChatProvider();
+            case "embedding" -> properties.getActiveEmbeddingProvider();
+            case "rerank" -> properties.getActiveRerankProvider();
+            case "vision" -> properties.getActiveVisionProvider();
+            default -> throw new IllegalArgumentException("不支持的 AI capability: " + capability);
+        };
+        if (providerName == null || providerName.isBlank()) {
+            return Optional.empty();
+        }
+        return (properties.getProviders() == null ? List.<Provider>of() : properties.getProviders())
+                .stream()
+                .filter(Provider::isEnabled)
+                .filter(provider -> Objects.equals(providerName, provider.getName()))
+                .filter(provider -> provider.getCapabilities() != null
+                        && provider.getCapabilities().contains(capability))
+                .findFirst();
     }
 }
