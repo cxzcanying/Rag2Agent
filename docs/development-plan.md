@@ -92,9 +92,10 @@
 - 已完成：按 chat/embedding/rerank capability 解析 active provider，主链路、缓存 key 和可观测标签不再依赖固定 provider 名称；新增 OpenAI-compatible provider 只需增加配置并切换 active 项。
 - 已完成：内部工具和可选 MCP 工具统一进入 `ToolRegistry`，工具参数按 descriptor schema 做必填项和基础类型校验；新增只读工具无需修改 Agent 循环。
 - 已完成：`ToolExecutor` 统一执行权限钩子、有界线程池、超时、Observation/Micrometer 和 `tool_call` 成功/失败/超时审计；高风险工具继续复用现有审批记录，不重复创建调用记录。
-- 已完成：MCP 远程工具发现/调用契约和本地适配；远程发现失败时保留本地工具，远程调用受统一超时隔离。
-- 已验证：MCP 服务通过真实 HTTP 网络传输提供 JSON-RPC initialize/tools/list/tools/call；无凭证、错误 scope 均返回 401，正确 Bearer token + `mcp:read` 成功，越权工具调用返回 403。
-- 当前边界：MCP 是项目内 JSON-RPC HTTP 子集，尚未承诺完整官方 Streamable HTTP 会话协商；非 OpenAI-compatible provider 仍需新增协议 adapter，动态刷新仍归配置中心阶段。
+- 已完成：MCP 服务迁移到官方 Java SDK 2.0 Streamable HTTP，支持协议版本协商、会话恢复、工具、资源、提示词和分页工具发现。
+- 已完成：远程 MCP 工具接入官方同步客户端，保留本地工具降级；未声明只读的远程工具默认要求人工审批。
+- 已验证：官方 MCP 客户端完成 initialize、tools/list、resources/list、prompts/list 和 tools/call；无 Bearer 返回 401，scope 不足返回 403。
+- 当前边界：mcp-server 提供连通性工具和运行时资源/提示词；业务工具仍由 bootstrap 本地注册表提供，动态刷新和 OAuth 授权服务器归后续阶段。
 
 ### 第二版 D7 实际进度（集成验收与成本治理）
 
@@ -107,5 +108,5 @@
 ### V2 范围裁决
 
 - **本周必须做**：评测异步化、上下文预算、OTel/Jaeger 链路、结构化日志、限流/超时/重试/降级、幂等、Token 与缓存指标。
-- **本周做抽象但不强行上线**：Nacos/Apollo 动态配置、非兼容模型 adapter、完整官方 Streamable HTTP 会话协商；当前 MCP 项目内 JSON-RPC HTTP 子集已完成，先保留本地 fallback。
+- **本周做抽象但不强行上线**：Nacos/Apollo 动态配置、非兼容模型 adapter 和 OAuth 授权服务器；官方 MCP Streamable HTTP 已完成，保留本地工具 fallback。
 - **暂不纳入七天核心验收**：GraphRAG、复杂提示注入分类模型、完整语义缓存平台、跨地域配置中心高可用。这些可在 V2.1 继续推进。

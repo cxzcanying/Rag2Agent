@@ -28,6 +28,15 @@
       <version>${project.version}</version>
     </dependency>
     <dependency>
+      <groupId>io.modelcontextprotocol.sdk</groupId>
+      <artifactId>mcp-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.modelcontextprotocol.sdk</groupId>
+      <artifactId>mcp-json-jackson2</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
       <groupId>com.rag2agent</groupId>
       <artifactId>rag-core</artifactId>
       <version>${project.version}</version>

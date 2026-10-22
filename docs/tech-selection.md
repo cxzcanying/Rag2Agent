@@ -127,7 +127,7 @@ v3 决策：继续自建 Agent Runtime，从“单次状态机”升级为“事
 - 工具协议：采用 MCP Java SDK 2.0，优先使用 Streamable HTTP；内部工具与远程工具统一进工具注册表。
   - 统一 ToolDescriptor：名称/描述/参数 JSON Schema/敏感度/授权角色/超时/重试/幂等键/成本等级；
   - SDK 能力：工具发现、调用、资源、提示词、能力协商、进度、OAuth 挂钩和 Schema 校验；
-  - 接入通道：内部 Java 工具 + 本地/远程 MCP Server；项目内 JSON-RPC HTTP 子集保留为兼容路径。
+  - 接入通道：内部 Java 工具 + 官方 MCP Java SDK 2.0 本地/远程 Server；远程工具默认按工具标注决定是否审批。
 - 敏感操作机制：
   - 敏感度分级：只读（查询/检索）→ 普通写（知识库内操作）→ 高风险（跨系统、外部副作用、删除、支付类）；
   - 高风险操作必须 human-in-the-loop 审批，审批动作全审计；
@@ -343,7 +343,7 @@ flowchart LR
 | D-05 | 表格由 Java 建立逻辑表格和跨页合并 | 只保存 Markdown 表格、把跨页处理完全交给解析器 | 可把稳定行 ID、表头路径、页码和业务权限落到项目数据模型 | 跨页 Gold Set、重复表头、行截断和分页连续性 |
 | D-06 | Agent Runtime 继续自建 | Temporal、LangGraph、OpenAI Agents SDK、Microsoft Agent Framework | 当前 Java 状态机、审批、auth、审计和 OTel 已存在；外部框架作为契约参考 | 崩溃恢复、审批替换、预算终止和事件重建 |
 | D-07 | 推理模式使用统一能力注册和 Provider Adapter | 业务代码直接传各供应商参数 | 避免绑定单一模型字段，支持动态路由、降级和成本评测 | 不同推理档位的质量、延迟、费用矩阵 |
-| D-08 | MCP 升级到 Java SDK 2.0 / Streamable HTTP | 继续项目内 JSON-RPC 子集、自研协议 | 官方协议生命周期、Schema、资源和提示词能力完整；旧适配保留兼容 | MCP 鉴权、发现、调用、断线、版本协商 |
+| D-08 | MCP 升级到 Java SDK 2.0 / Streamable HTTP | 项目内 JSON-RPC 子集、自研协议 | 官方协议生命周期、Schema、资源、提示词、会话恢复和版本协商完整 | 官方客户端 initialize、发现、调用、鉴权与断线重连测试 |
 | D-09 | 多 Agent 只采用 Coordinator-Worker-Reviewer | 自由群聊、多拓扑通用平台、单 Agent | 一个有明确收益的拓扑便于控制预算、上下文和验证质量 | 与单 Agent 基线比较质量、延迟、重复工作率和费用 |
 | D-10 | 长期记忆使用 PostgreSQL + pgvector | 新增独立记忆服务、仅 Redis | 与现有元数据和权限同库，支持来源、TTL、删除和向量检索 | 记忆来源、冲突、投毒、删除和租户隔离 |
 | D-11 | 图数据使用 Neo4j + GDS | 外部 GraphRAG 平台、文档字段模拟图 | 证据边、路径、社区摘要和受限 Cypher 都在同一图数据面 | 实体链接、双跳路径、社区摘要和故障降级 |

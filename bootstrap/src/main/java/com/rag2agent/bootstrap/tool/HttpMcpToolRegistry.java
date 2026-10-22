@@ -1,80 +1,114 @@
 package com.rag2agent.bootstrap.tool;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.config.McpRemoteProperties;
 import com.rag2agent.mcp.registry.McpToolRegistry;
+import io.modelcontextprotocol.client.McpClient;
+import io.modelcontextprotocol.client.McpSyncClient;
+import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
+import io.modelcontextprotocol.spec.McpSchema;
+import jakarta.annotation.PreDestroy;
 import java.net.URI;
-import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-/** MCP Streamable HTTP 客户端，服务不可用时由 ToolRegistry 保留本地工具。 */
+/** MCP 2.0 Streamable HTTP 客户端；远程服务异常时由 ToolRegistry 保留本地工具。 */
 @Component
 @ConditionalOnProperty(prefix = "rag2agent.mcp.remote", name = "enabled", havingValue = "true")
 public class HttpMcpToolRegistry implements McpToolRegistry {
 
-    private final ObjectMapper objectMapper;
-    private final McpRemoteProperties properties;
-    private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
+    private static final int MAX_PAGES = 20;
 
-    public HttpMcpToolRegistry(ObjectMapper objectMapper, McpRemoteProperties properties) {
-        this.objectMapper = objectMapper;
+    private final McpRemoteProperties properties;
+    private volatile McpSyncClient client;
+
+    public HttpMcpToolRegistry(McpRemoteProperties properties) {
         this.properties = properties;
     }
 
     @Override
     public List<McpToolDefinition> listTools() {
-        call("initialize", Map.of("protocolVersion", "2025-06-18", "capabilities", Map.of(),
-                "clientInfo", Map.of("name", "rag2agent", "version", "0.1.0")));
-        Map<String, Object> result = call("tools/list", Map.of());
-        List<Map<String, Object>> tools = objectMapper.convertValue(
-                result.getOrDefault("tools", List.of()), new TypeReference<>() {});
         List<McpToolDefinition> definitions = new ArrayList<>();
-        for (Map<String, Object> tool : tools) {
-            definitions.add(new McpToolDefinition(String.valueOf(tool.get("name")),
-                    String.valueOf(tool.getOrDefault("description", "")),
-                    objectMapper.convertValue(tool.getOrDefault("inputSchema", Map.of()), new TypeReference<>() {}),
-                    false));
+        String cursor = null;
+        for (int page = 0; page < MAX_PAGES; page++) {
+            McpSchema.ListToolsResult result =
+                    cursor == null ? client().listTools() : client().listTools(cursor);
+            result.tools().forEach(tool -> definitions.add(new McpToolDefinition(
+                    tool.name(),
+                    tool.description() == null ? "" : tool.description(),
+                    tool.inputSchema(),
+                    !Boolean.TRUE.equals(
+                            tool.annotations() == null ? null : tool.annotations().readOnlyHint()))));
+            cursor = result.nextCursor();
+            if (cursor == null || cursor.isBlank()) {
+                break;
+            }
         }
-        return definitions;
+        return List.copyOf(definitions);
     }
 
     @Override
     public String execute(String toolName, Map<String, Object> arguments) {
-        Map<String, Object> result = call("tools/call", Map.of("name", toolName, "arguments", arguments));
-        List<Map<String, Object>> content = objectMapper.convertValue(result.getOrDefault("content", List.of()), new TypeReference<>() {});
-        return content.stream().map(item -> String.valueOf(item.getOrDefault("text", ""))).findFirst().orElse("");
+        McpSchema.CallToolResult result = client().callTool(
+                McpSchema.CallToolRequest.builder(toolName)
+                        .arguments(arguments)
+                        .build());
+        String content = result.content().stream()
+                .filter(McpSchema.TextContent.class::isInstance)
+                .map(McpSchema.TextContent.class::cast)
+                .map(McpSchema.TextContent::text)
+                .findFirst()
+                .orElse("");
+        if (Boolean.TRUE.equals(result.isError())) {
+            throw new IllegalStateException("MCP 工具执行失败: " + content);
+        }
+        return content;
     }
 
-    private Map<String, Object> call(String method, Map<String, Object> params) {
-        try {
-            Map<String, Object> request = new LinkedHashMap<>();
-            request.put("jsonrpc", "2.0");
-            request.put("id", System.nanoTime());
-            request.put("method", method);
-            request.put("params", params);
-            HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(properties.getEndpoint()))
-                    .timeout(Duration.ofSeconds(10))
-                    .header("Authorization", "Bearer " + properties.getToken())
-                    .header("X-MCP-Scopes", properties.getScopes())
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(request)))
-                    .build();
-            HttpResponse<String> response = client.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() / 100 != 2) throw new IllegalStateException("MCP HTTP " + response.statusCode());
-            Map<String, Object> body = objectMapper.readValue(response.body(), new TypeReference<>() {});
-            if (body.containsKey("error")) throw new IllegalStateException("MCP error: " + body.get("error"));
-            return objectMapper.convertValue(body.get("result"), new TypeReference<>() {});
-        } catch (Exception exception) {
-            throw new IllegalStateException("MCP 远程调用失败", exception);
+    private McpSyncClient client() {
+        McpSyncClient current = client;
+        if (current != null) {
+            return current;
+        }
+        synchronized (this) {
+            if (client == null) {
+                client = createClient();
+                client.initialize();
+            }
+            return client;
+        }
+    }
+
+    private McpSyncClient createClient() {
+        URI endpoint = URI.create(properties.getEndpoint());
+        String baseUrl = endpoint.getScheme() + "://" + endpoint.getRawAuthority();
+        String path = endpoint.getRawPath() == null || endpoint.getRawPath().isBlank()
+                ? "/mcp"
+                : endpoint.getRawPath();
+        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+                .header("Authorization", "Bearer " + properties.getToken())
+                .header("X-MCP-Scopes", properties.getScopes());
+        HttpClientStreamableHttpTransport transport =
+                HttpClientStreamableHttpTransport.builder(baseUrl)
+                        .endpoint(path)
+                        .requestBuilder(requestBuilder)
+                        .connectTimeout(Duration.ofSeconds(3))
+                        .build();
+        return McpClient.sync(transport)
+                .clientInfo(McpSchema.Implementation.builder("rag2agent", "0.1.0").build())
+                .requestTimeout(Duration.ofSeconds(10))
+                .build();
+    }
+
+    @PreDestroy
+    public void close() {
+        McpSyncClient current = client;
+        if (current != null) {
+            current.closeGracefully();
         }
     }
 }
