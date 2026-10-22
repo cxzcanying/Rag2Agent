@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.config.RetrievalProperties;
+import com.rag2agent.bootstrap.graph.GraphRetriever;
 import com.rag2agent.framework.common.ErrorCode;
 import com.rag2agent.framework.exception.BusinessException;
 import com.rag2agent.infra.ai.client.EmbeddingClient;
@@ -40,11 +41,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 /**
- * 混合检索：向量（pgvector 余弦相似度）+ 关键词（pg_trgm）两路召回，RRF 融合，再 Rerank 精排。
+ * 混合检索：向量、关键词和知识图谱多路召回，RRF 融合，再 Rerank 精排。
  * 引用溯源：metadata 里带 document_id / chunk_index，检索结果可直接定位原文。
  * 权限边界：SQL 按 kb_id 过滤；版本正确性靠 c.version = d.version 保证只查当前版本。
  * <p>
- * 编排流程：QueryRouter 规则路由决定走哪几路 → 两路召回（向量/关键词）→ RRF 融合
+ * 编排流程：QueryRouter 规则路由决定走哪几路 → 多路召回（向量/关键词/图）→ RRF 融合
  * （分数域统一、同名 chunk 去重累加）→ bge-reranker 精排（只改排序不改召回）。
  * @author 21311
  */
@@ -61,6 +62,7 @@ public class HybridSearchService {
     private final RetrievalProperties retrievalProperties;
     private final ObjectMapper objectMapper;
     private final TableContextExpander tableContextExpander;
+    private final GraphRetriever graphRetriever;
 
     /**
      * 三个依赖的分工：
@@ -77,7 +79,8 @@ public class HybridSearchService {
             QueryEmbeddingCache queryEmbeddingCache,
             RetrievalProperties retrievalProperties,
             ObjectMapper objectMapper,
-            TableContextExpander tableContextExpander) {
+            TableContextExpander tableContextExpander,
+            GraphRetriever graphRetriever) {
         this.jdbc = jdbc;
         this.embeddingClient = embeddingClient;
         this.rerankClient = rerankClient;
@@ -88,6 +91,7 @@ public class HybridSearchService {
         this.retrievalProperties = retrievalProperties;
         this.objectMapper = objectMapper;
         this.tableContextExpander = tableContextExpander;
+        this.graphRetriever = graphRetriever;
     }
 
     public List<RetrievalResult> search(Long kbId, String query, int topK) {
@@ -131,6 +135,7 @@ public class HybridSearchService {
                 .observe(() -> resolveRoute(options.strategy(), query));
         CompletableFuture<List<RetrievalResult>> vectorFuture;
         CompletableFuture<List<RetrievalResult>> keywordFuture;
+        CompletableFuture<List<RetrievalResult>> graphFuture;
         try {
             vectorFuture = route != Route.KEYWORD
                 ? CompletableFuture.supplyAsync(
@@ -146,21 +151,32 @@ public class HybridSearchService {
                                 .observe(() -> keywordSearch(kbId, query, options.candidateTopK())),
                         retrievalTaskExecutor)
                 : CompletableFuture.completedFuture(List.of());
+            graphFuture = graphRetriever != null && graphRetriever.enabled()
+                    ? CompletableFuture.supplyAsync(
+                            () -> Observation.createNotStarted("rag2agent.search.graph", observationRegistry)
+                                    .lowCardinalityKeyValue("route", route.name().toLowerCase(Locale.ROOT))
+                                    .observe(() -> graphRetriever.search(
+                                            kbId, query, options.candidateTopK())),
+                            retrievalTaskExecutor)
+                    : CompletableFuture.completedFuture(List.of());
         } catch (RejectedExecutionException exception) {
             meterRegistry.counter("rag2agent.search.retrieval.rejected").increment();
             throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "检索服务繁忙，请稍后重试");
         }
         // 两路召回互不依赖，受控并行后统一等待；超时只降级掉未完成分支，其他异常仍向上抛出。
-        List<List<RetrievalResult>> parallelResults = awaitParallel(vectorFuture, keywordFuture);
+        List<List<RetrievalResult>> parallelResults =
+                awaitParallel(vectorFuture, keywordFuture, graphFuture);
         List<RetrievalResult> vectorResults = parallelResults.get(0);
         List<RetrievalResult> keywordResults = parallelResults.get(1);
+        List<RetrievalResult> graphResults = parallelResults.get(2);
 
-        // RRF 融合两路结果，分数域统一、同名 chunk 去重累加
+        // RRF 融合多路结果，分数域统一、同名 chunk 去重累加
         int fusedTopK = options.rerankEnabled() ? options.candidateTopK() : options.topK();
         List<RetrievalResult> fused = Observation.createNotStarted("rag2agent.search.rrf", observationRegistry)
                 .lowCardinalityKeyValue("route", route.name().toLowerCase(Locale.ROOT))
                 .observe(() -> RrfFusion.fuse(
-                        List.of(vectorResults, keywordResults), fusedTopK, options.rrfK()));
+                        List.of(vectorResults, keywordResults, graphResults),
+                        fusedTopK, options.rrfK()));
         // 两路都没有候选：直接返回空，避免拿空列表去调 rerank 白花钱
         if (fused.isEmpty()) {
             return List.of();
@@ -184,11 +200,13 @@ public class HybridSearchService {
 
     private List<List<RetrievalResult>> awaitParallel(
             CompletableFuture<List<RetrievalResult>> vectorFuture,
-            CompletableFuture<List<RetrievalResult>> keywordFuture) {
-        CompletableFuture<Void> all = CompletableFuture.allOf(vectorFuture, keywordFuture);
+            CompletableFuture<List<RetrievalResult>> keywordFuture,
+            CompletableFuture<List<RetrievalResult>> graphFuture) {
+        CompletableFuture<Void> all =
+                CompletableFuture.allOf(vectorFuture, keywordFuture, graphFuture);
         try {
             all.get(retrievalProperties.getParallelTimeoutMillis(), TimeUnit.MILLISECONDS);
-            return List.of(vectorFuture.join(), keywordFuture.join());
+            return List.of(vectorFuture.join(), keywordFuture.join(), graphFuture.join());
         } catch (TimeoutException exception) {
             if (!vectorFuture.isDone()) {
                 vectorFuture.cancel(true);
@@ -198,11 +216,19 @@ public class HybridSearchService {
                 keywordFuture.cancel(true);
                 meterRegistry.counter("rag2agent.search.retrieval.timeout", "route", "keyword").increment();
             }
-            return List.of(completedOrEmpty(vectorFuture), completedOrEmpty(keywordFuture));
+            if (!graphFuture.isDone()) {
+                graphFuture.cancel(true);
+                meterRegistry.counter("rag2agent.search.retrieval.timeout", "route", "graph").increment();
+            }
+            return List.of(
+                    completedOrEmpty(vectorFuture),
+                    completedOrEmpty(keywordFuture),
+                    completedOrEmpty(graphFuture));
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             vectorFuture.cancel(true);
             keywordFuture.cancel(true);
+            graphFuture.cancel(true);
             throw new IllegalStateException("检索并行任务被中断", exception);
         } catch (ExecutionException exception) {
             throw propagate(exception.getCause());

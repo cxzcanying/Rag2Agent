@@ -125,7 +125,7 @@ class EvaluationServiceTest {
 
     private static EvaluationService service(FakeRepository repository, Executor executor) {
         HybridSearchService search = new HybridSearchService(null, null, null, new SimpleMeterRegistry(),
-                null, null, null, null, new com.fasterxml.jackson.databind.ObjectMapper(), null) {
+                null, null, null, null, new com.fasterxml.jackson.databind.ObjectMapper(), null, null) {
             @Override
             public List<com.rag2agent.rag.core.retrieval.RetrievalResult> search(
                     Long kbId, String query, com.rag2agent.bootstrap.service.SearchOptions options) {

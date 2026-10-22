@@ -90,13 +90,21 @@ public class KnowledgeGraphRepository {
         String cypher = """
                 MATCH (start:Entity {kb_id: $kbId})
                 WHERE toLower(start.canonical_name) CONTAINS toLower($query)
+                   OR toLower($query) CONTAINS toLower(start.canonical_name)
                 MATCH p=(start)-[rels:RELATED*1..%d]-(end:Entity {kb_id: $kbId})
                 WHERE all(r IN rels WHERE r.kb_id = $kbId)
                 RETURN start.canonical_name AS source,
                        [r IN rels | r.relation_type] AS relationTypes,
                        end.canonical_name AS target,
                        [n IN nodes(p) | n.canonical_name] AS nodes,
-                       reduce(score = 0.0, r IN rels | score + coalesce(r.confidence, 0.0)) AS score
+                       reduce(score = 0.0, r IN rels | score + coalesce(r.confidence, 0.0)) AS score,
+                       [r IN rels | {
+                           documentId: r.document_id,
+                           version: r.version,
+                           elementId: r.evidence,
+                           relationType: r.relation_type,
+                           confidence: coalesce(r.confidence, 0.0)
+                       }] AS evidence
                 ORDER BY score DESC
                 LIMIT $limit
                 """.formatted(maxHops);
@@ -109,7 +117,20 @@ public class KnowledgeGraphRepository {
                             record.get("relationTypes").asList(value -> value.asString()),
                             record.get("target").asString(),
                             record.get("nodes").asList(value -> value.asString()),
-                            record.get("score").asDouble()))
+                            record.get("score").asDouble(),
+                            record.get("evidence").asList(value -> {
+                                Map<String, Object> item = value.asMap();
+                                return new GraphEvidence(
+                                        item.get("documentId") == null
+                                                ? null
+                                                : ((Number) item.get("documentId")).longValue(),
+                                        item.get("version") == null
+                                                ? 0
+                                                : ((Number) item.get("version")).intValue(),
+                                        (String) item.get("elementId"),
+                                        (String) item.get("relationType"),
+                                        ((Number) item.get("confidence")).doubleValue());
+                            })))
                     .toList());
         }
     }
@@ -241,7 +262,29 @@ public class KnowledgeGraphRepository {
             List<String> relationTypes,
             String target,
             List<String> nodes,
-            double score) {}
+            double score,
+            List<GraphEvidence> evidence) {
+
+        public GraphPath {
+            evidence = evidence == null ? List.of() : List.copyOf(evidence);
+        }
+
+        public GraphPath(
+                String source,
+                List<String> relationTypes,
+                String target,
+                List<String> nodes,
+                double score) {
+            this(source, relationTypes, target, nodes, score, List.of());
+        }
+    }
+
+    public record GraphEvidence(
+            Long documentId,
+            int version,
+            String elementId,
+            String relationType,
+            double confidence) {}
 
     public record CommunityEntities(
             long communityId, List<String> entities, long entityCount) {}
