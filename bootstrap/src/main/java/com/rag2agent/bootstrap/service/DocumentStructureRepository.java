@@ -1,6 +1,7 @@
 package com.rag2agent.bootstrap.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.entity.DocumentMeta;
 import com.rag2agent.rag.core.document.StructuredDocument;
@@ -12,6 +13,7 @@ import com.rag2agent.rag.core.document.StructuredDocument.Table;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -121,4 +123,90 @@ public class DocumentStructureRepository {
             throw new IllegalArgumentException("文档结构 JSON 序列化失败", exception);
         }
     }
+
+    public Optional<TableRecord> findTable(Long documentId, int version, String tableId) {
+        List<TableRecord> tables = jdbc.query("""
+                SELECT table_id, title, CAST(headers AS text) AS headers,
+                       page_from, page_to, CAST(bbox AS text) AS bbox
+                FROM document_table
+                WHERE document_id = ? AND version = ? AND table_id = ?
+                """, (rs, rowNum) -> new TableRecord(
+                        rs.getString("table_id"),
+                        rs.getString("title"),
+                        stringList(rs.getString("headers")),
+                        rs.getObject("page_from", Integer.class),
+                        rs.getObject("page_to", Integer.class),
+                        boundingBox(rs.getString("bbox"))),
+                documentId, version, tableId);
+        return tables.stream().findFirst();
+    }
+
+    public long countRows(Long documentId, int version, String tableId) {
+        Long count = jdbc.queryForObject("""
+                SELECT count(*) FROM document_table_row
+                WHERE document_id = ? AND version = ? AND table_id = ?
+                """, Long.class, documentId, version, tableId);
+        return count == null ? 0 : count;
+    }
+
+    public List<RowRecord> findRows(
+            Long documentId, int version, String tableId, int afterRowIndex, int limit) {
+        return jdbc.query("""
+                SELECT row_id, row_index, CAST(cells AS text) AS cells, semantic_text,
+                       page_no, CAST(bbox AS text) AS bbox
+                FROM document_table_row
+                WHERE document_id = ? AND version = ? AND table_id = ? AND row_index > ?
+                ORDER BY row_index
+                LIMIT ?
+                """, (rs, rowNum) -> new RowRecord(
+                        rs.getString("row_id"),
+                        rs.getInt("row_index"),
+                        stringList(rs.getString("cells")),
+                        rs.getString("semantic_text"),
+                        rs.getObject("page_no", Integer.class),
+                        boundingBox(rs.getString("bbox"))),
+                documentId, version, tableId, afterRowIndex, limit);
+    }
+
+    private List<String> stringList(String json) {
+        try {
+            return mapper.readValue(json, mapper.getTypeFactory()
+                    .constructCollectionType(List.class, String.class));
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("文档结构 JSON 解析失败", exception);
+        }
+    }
+
+    private BoundingBox boundingBox(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode node = mapper.readTree(json);
+            return new BoundingBox(
+                    node.path("l").asDouble(),
+                    node.path("t").asDouble(),
+                    node.path("r").asDouble(),
+                    node.path("b").asDouble(),
+                    node.path("coord_origin").asText(""));
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("bbox JSON 解析失败", exception);
+        }
+    }
+
+    public record TableRecord(
+            String tableId,
+            String title,
+            List<String> headers,
+            Integer pageFrom,
+            Integer pageTo,
+            BoundingBox boundingBox) {}
+
+    public record RowRecord(
+            String rowId,
+            int rowIndex,
+            List<String> cells,
+            String semanticText,
+            Integer pageNo,
+            BoundingBox boundingBox) {}
 }

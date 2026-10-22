@@ -112,6 +112,18 @@ public class DocumentService {
                 .toList();
     }
 
+    public DocumentMeta requireOwnedDocument(Long userId, Long documentId) {
+        if (documentId == null || documentId <= 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "documentId 必须为正数");
+        }
+        DocumentMeta document = documentMapper.selectById(documentId);
+        if (document == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "文档不存在");
+        }
+        knowledgeBaseService.requireOwned(userId, document.getKbId());
+        return document;
+    }
+
     public PresignResponse presign(Long userId, Long documentId) {
         DocumentMeta doc = documentMapper.selectById(documentId);
         if (doc == null) {

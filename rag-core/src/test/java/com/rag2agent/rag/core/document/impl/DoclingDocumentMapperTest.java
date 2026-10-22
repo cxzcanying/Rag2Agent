@@ -66,13 +66,16 @@ class DoclingDocumentMapperTest {
         StructuredDocument result = new DoclingDocumentMapper().map("doc-1", document, "年度报告\n\n收入表");
 
         assertEquals(3, result.elements().size());
+        assertEquals("texts-0", result.elements().getFirst().id());
         assertEquals("title", result.elements().getFirst().type());
         assertEquals(1, result.elements().getFirst().pageFrom());
         assertEquals(1, result.tables().size());
+        assertEquals("tables-0", result.tables().getFirst().id());
         assertEquals("收入表", result.tables().getFirst().title());
         assertEquals(java.util.List.of("项目", "金额"), result.tables().getFirst().headers());
         assertEquals("项目=收入；金额=100", result.tables().getFirst().rows().getFirst().semanticText());
         assertEquals(1, result.assets().size());
+        assertEquals("pictures-0", result.assets().getFirst().id());
         assertEquals("images/table.png", result.assets().getFirst().contentReference());
         assertEquals(2, result.pages().size());
         assertEquals("docling", result.metadata().get("parser"));

@@ -62,8 +62,8 @@ public final class DoclingDocumentMapper {
                 content = text(item, "text", "");
             }
             elements.add(new Element(
-                    reference.isBlank() ? "element-" + elementIndex : reference,
-                    text(item.path("parent"), "$ref", null),
+                    reference.isBlank() ? "element-" + elementIndex : stableId(reference),
+                    stableId(text(item.path("parent"), "$ref", null)),
                     type,
                     elementIndex++,
                     page,
@@ -168,7 +168,7 @@ public final class DoclingDocumentMapper {
                 semantic.append(header).append("=").append(values.get(index));
             }
             rows.add(new Row(
-                    text(item, "self_ref", "table") + "-row-" + entry.getKey(),
+                    stableId(text(item, "self_ref", "table")) + "-row-" + entry.getKey(),
                     entry.getKey(),
                     values,
                     semantic.toString(),
@@ -179,7 +179,7 @@ public final class DoclingDocumentMapper {
         String markdown = toMarkdown(headers, rows);
         JsonNode provenance = firstProvenance(item);
         return new Table(
-                text(item, "self_ref", "table"),
+                stableId(text(item, "self_ref", "table")),
                 title,
                 headers,
                 rows,
@@ -195,7 +195,7 @@ public final class DoclingDocumentMapper {
         String contentReference = text(item.path("image"), "uri",
                 text(item.path("image"), "path", text(item, "self_ref", "")));
         return new Asset(
-                text(item, "self_ref", "picture"),
+                stableId(text(item, "self_ref", "picture")),
                 text(item, "label", "picture"),
                 captions.isEmpty() ? "" : captions.getFirst(),
                 contentReference,
@@ -365,6 +365,13 @@ public final class DoclingDocumentMapper {
             return "picture";
         }
         return "text";
+    }
+
+    private static String stableId(String reference) {
+        if (reference == null || reference.isBlank()) {
+            return null;
+        }
+        return reference.replaceFirst("^#/", "").replace('/', '-');
     }
 
     private static int sourceIndex(JsonNode node) {
