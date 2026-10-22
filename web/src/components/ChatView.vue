@@ -95,6 +95,11 @@ async function recoverRun(runId, assistant) {
       processStage.value = ''
       return
     }
+    if (result.status === 'CANCELLED') {
+      assistant.content = result.answer || '运行已取消'
+      processStage.value = ''
+      return
+    }
     if (result.status === 'WAITING_APPROVAL' && result.pendingApprovalToolCallId) {
       pendingApproval.value = {
         runId,
@@ -144,6 +149,21 @@ function handleEvent(msg, event, eventId = null) {
       processStage.value = ''
       msg.content = '执行出错：' + event.data
       break
+  }
+}
+
+async function cancelRun() {
+  const assistant = messages.value[messages.value.length - 1]
+  if (!assistant?.runId) return
+  try {
+    const result = await agent.cancel(assistant.runId)
+    assistant.content = result.answer || '运行已取消'
+    assistant.references = result.references || assistant.references
+    processStage.value = ''
+    pendingApproval.value = null
+    sending.value = false
+  } catch (e) {
+    ElMessage.error(e.message)
   }
 }
 
@@ -222,6 +242,14 @@ async function approve(approved) {
       <div v-if="processStage" class="process-stage">
         <span class="spinner"></span>
         {{ processStage }}
+        <el-button
+          v-if="messages[messages.length - 1]?.runId"
+          link
+          type="danger"
+          @click="cancelRun"
+        >
+          取消运行
+        </el-button>
       </div>
     </div>
 

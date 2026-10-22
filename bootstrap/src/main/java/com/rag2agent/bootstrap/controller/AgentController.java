@@ -174,6 +174,14 @@ public class AgentController {
         return ApiResponse.success(agentRunService.getRun(StpUtil.getLoginIdAsLong(), runId));
     }
 
+    @PostMapping("/agent/runs/{runId}/cancel")
+    public ApiResponse<AgentExecutionResult> cancel(@PathVariable Long runId) {
+        Long userId = StpUtil.getLoginIdAsLong();
+        AgentExecutionResult result = agentRunService.cancel(userId, runId);
+        taskService.cancelRun(runId, "用户取消 Agent 运行");
+        return ApiResponse.success(result);
+    }
+
     @GetMapping("/agent/sessions/{sessionId}/events")
     public ApiResponse<java.util.List<PersistedAgentEvent>> persistedEvents(
             @PathVariable String sessionId,

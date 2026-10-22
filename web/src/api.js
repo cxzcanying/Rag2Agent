@@ -79,6 +79,7 @@ export const agent = {
     await readSse(resp, onEvent)
   },
   getRun: (runId) => request('/agent/runs/' + runId),
+  cancel: (runId) => request('/agent/runs/' + runId + '/cancel', { method: 'POST' }),
   approve: (runId, approved) =>
     request('/agent/approvals/' + runId, { method: 'POST', body: JSON.stringify({ approved }) })
 }

@@ -64,6 +64,26 @@ class AgentRunServiceTest {
     }
 
     @Test
+    void ownerCanCancelRunningAgent() {
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), "agent-run-cancel-test"),
+                AgentRun.class);
+        AgentRun running = new AgentRun();
+        running.setId(45L);
+        running.setUserId(7L);
+        running.setStatus("RUNNING");
+        AgentRunMapper runs = mock(AgentRunMapper.class);
+        when(runs.selectById(45L)).thenReturn(running);
+        when(runs.update(any(), any())).thenReturn(1);
+        AgentRunService service = serviceWith(runs, redisWithReferences());
+
+        AgentExecutionResult result = service.cancel(7L, 45L);
+
+        assertEquals("CANCELLED", result.status());
+        org.mockito.Mockito.verify(runs).update(any(), any());
+    }
+
+    @Test
     void duplicateInsertRereadsRunForConcurrentClientRequest() {
         AgentRun existing = new AgentRun();
         existing.setId(42L);

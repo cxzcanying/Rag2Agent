@@ -97,13 +97,29 @@ public class AgentTaskService {
                 """, json(output), taskId);
     }
 
+    @Transactional
     public int fail(Long taskId, String error) {
-        return jdbc.update("""
+        int failed = jdbc.update("""
                 UPDATE agent_task
                 SET status = 'FAILED', error_message = ?,
                     completed_at = now(), updated_at = now()
                 WHERE id = ? AND status IN ('PENDING', 'RUNNING')
                 """, error, taskId);
+        if (failed == 1) {
+            blockDependents(taskId, "上游任务失败: " + error);
+        }
+        return failed;
+    }
+
+    @Transactional
+    public int cancelRun(Long runId, String reason) {
+        int cancelled = jdbc.update("""
+                UPDATE agent_task
+                SET status = 'CANCELLED', error_message = ?,
+                    completed_at = now(), updated_at = now()
+                WHERE run_id = ? AND status IN ('PENDING', 'RUNNING')
+                """, reason, runId);
+        return cancelled;
     }
 
     private AgentTask map(java.sql.ResultSet rs) throws java.sql.SQLException {
@@ -122,6 +138,25 @@ public class AgentTaskService {
                 instant(rs.getTimestamp("started_at")),
                 instant(rs.getTimestamp("completed_at")),
                 instant(rs.getTimestamp("created_at")));
+    }
+
+    private void blockDependents(long failedTaskId, String reason) {
+        jdbc.update("""
+                WITH RECURSIVE affected AS (
+                    SELECT id
+                    FROM agent_task
+                    WHERE ?::bigint = ANY(depends_on)
+                    UNION
+                    SELECT task.id
+                    FROM agent_task task
+                    JOIN affected ON affected.id = ANY(task.depends_on)
+                )
+                UPDATE agent_task
+                SET status = 'BLOCKED', error_message = ?,
+                    completed_at = now(), updated_at = now()
+                WHERE id IN (SELECT id FROM affected)
+                  AND status = 'PENDING'
+                """, failedTaskId, reason);
     }
 
     private List<Long> longs(Array array) throws java.sql.SQLException {

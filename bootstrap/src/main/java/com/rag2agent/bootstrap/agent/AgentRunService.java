@@ -404,11 +404,17 @@ public class AgentRunService {
             Long runId, Long userId, List<ChatMessage> messages, List<Reference> references,
             int maxIterations, Consumer<AgentEvent> onEvent) {
         updateStatus(runId, "EXECUTING");
+        if (isCancelled(runId)) {
+            return cancelledResult(runId, references, onEvent);
+        }
 
         // 全局工具调用计数：防止单轮多个工具或跨轮反复调用同一工具把资源耗光。
         int totalToolCalls = 0;
         String reasoningEffort = resolveReasoningEffort(messages);
         for (int iteration = 0; iteration < maxIterations; iteration++) {
+            if (isCancelled(runId)) {
+                return cancelledResult(runId, references, onEvent);
+            }
             int estimatedTokens = contextCompactor.estimateTokens(messages);
             if (estimatedTokens > agentProperties.getContextTokenBudget()) {
                 onEvent.accept(new AgentEvent("context_compaction", Map.of(
@@ -470,9 +476,15 @@ public class AgentRunService {
             }
             recordLlmStep(
                     runId, iteration, response, System.currentTimeMillis() - startMs, reasoningEffort);
+            if (isCancelled(runId)) {
+                return cancelledResult(runId, references, onEvent);
+            }
 
             if (response.toolCalls() != null && !response.toolCalls().isEmpty()) {
                 for (ToolCall toolCall : response.toolCalls()) {
+                    if (isCancelled(runId)) {
+                        return cancelledResult(runId, references, onEvent);
+                    }
                     if (toolRegistry.requiresApproval(toolCall.name())) {
                         ToolCallRecord pending = new ToolCallRecord();
                         pending.setRunId(runId);
@@ -679,14 +691,52 @@ public class AgentRunService {
     private void updateStatus(Long runId, String status) {
         runMapper.update(null, new LambdaUpdateWrapper<AgentRun>()
                 .eq(AgentRun::getId, runId)
+                .ne(AgentRun::getStatus, "CANCELLED")
                 .set(AgentRun::getStatus, status));
     }
 
     private void updateAnswerAndStatus(Long runId, String status, String answer) {
         runMapper.update(null, new LambdaUpdateWrapper<AgentRun>()
                 .eq(AgentRun::getId, runId)
+                .ne(AgentRun::getStatus, "CANCELLED")
                 .set(AgentRun::getStatus, status)
                 .set(AgentRun::getAnswer, answer));
+    }
+
+    public AgentExecutionResult cancel(Long userId, Long runId) {
+        AgentRun run = runMapper.selectById(runId);
+        if (run == null || !userId.equals(run.getUserId())) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "Agent 执行不存在");
+        }
+        if ("CANCELLED".equals(run.getStatus())) {
+            return existingResult(run);
+        }
+        int updated = runMapper.update(null, new LambdaUpdateWrapper<AgentRun>()
+                .eq(AgentRun::getId, runId)
+                .eq(AgentRun::getUserId, userId)
+                .notIn(AgentRun::getStatus,
+                        List.of("COMPLETED", "DEGRADED", "MAX_STEPS_REACHED", "FAILED"))
+                .set(AgentRun::getStatus, "CANCELLED")
+                .set(AgentRun::getAnswer, "运行已取消"));
+        if (updated == 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "Agent 已进入终态，无法取消");
+        }
+        return new AgentExecutionResult(runId, "CANCELLED", "运行已取消", List.of(), null);
+    }
+
+    private boolean isCancelled(Long runId) {
+        AgentRun run = runMapper.selectById(runId);
+        return run != null && "CANCELLED".equals(run.getStatus());
+    }
+
+    private AgentExecutionResult cancelledResult(
+            Long runId, List<Reference> references, Consumer<AgentEvent> onEvent) {
+        recordAgentTransition("cancelled");
+        onEvent.accept(new AgentEvent("done", Map.of(
+                "answer", "运行已取消",
+                "references", references,
+                "cancelled", true)));
+        return new AgentExecutionResult(runId, "CANCELLED", "运行已取消", references, null);
     }
 
     private AgentExecutionResult existingResult(AgentRun run) {
