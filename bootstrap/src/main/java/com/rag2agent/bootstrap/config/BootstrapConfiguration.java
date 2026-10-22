@@ -66,15 +66,31 @@ public class BootstrapConfiguration {
         return executor;
     }
 
+    /** 多 Agent Worker 使用独立有界线程池，隔离分析并发与检索、工具调用。 */
+    @Bean(name = "agentWorkerTaskExecutor")
+    public ThreadPoolTaskExecutor agentWorkerTaskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(32);
+        executor.setThreadNamePrefix("agent-worker-");
+        executor.setTaskDecorator(new ContextPropagatingTaskDecorator());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(10);
+        return executor;
+    }
+
     @Bean
     public MeterBinder executorQueueMetrics(
             @Qualifier("evaluationTaskExecutor") ThreadPoolTaskExecutor evaluation,
             @Qualifier("retrievalTaskExecutor") ThreadPoolTaskExecutor retrieval,
-            @Qualifier("toolTaskExecutor") ThreadPoolTaskExecutor tool) {
+            @Qualifier("toolTaskExecutor") ThreadPoolTaskExecutor tool,
+            @Qualifier("agentWorkerTaskExecutor") ThreadPoolTaskExecutor agentWorker) {
         return registry -> {
             registerQueueGauge(registry, "evaluation", evaluation);
             registerQueueGauge(registry, "retrieval", retrieval);
             registerQueueGauge(registry, "tool", tool);
+            registerQueueGauge(registry, "agent-worker", agentWorker);
         };
     }
 

@@ -22,5 +22,13 @@ public class AgentProperties {
     private long approvalTimeoutSeconds = 30 * 60;
     /** off/auto/minimal/low/medium/high/max；auto 按问题复杂度选择。 */
     private String reasoningEffort = "off";
+    /** 团队研究固定启动的分析 Worker 数量，Reviewer 在全部结果返回后执行。 */
+    private int teamAnalystWorkers = 2;
+    /** 每个 Worker 的模型输入与输出总 Token 上限。 */
+    private int teamWorkerTokenBudget = 12_000;
+    /** 每个 Worker 可调用的工具次数上限。 */
+    private int teamWorkerToolBudget = 2;
+    /** 每个 Worker 从启动到返回的硬时限。 */
+    private long teamWorkerTimeoutMillis = 60_000;
 
 }

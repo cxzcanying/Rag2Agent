@@ -14,22 +14,27 @@ class BootstrapConfigurationTest {
         ThreadPoolTaskExecutor evaluation = configuration.evaluationTaskExecutor();
         ThreadPoolTaskExecutor retrieval = configuration.retrievalTaskExecutor();
         ThreadPoolTaskExecutor tool = configuration.toolTaskExecutor();
+        ThreadPoolTaskExecutor agentWorker = configuration.agentWorkerTaskExecutor();
         evaluation.initialize();
         retrieval.initialize();
         tool.initialize();
+        agentWorker.initialize();
         try {
             SimpleMeterRegistry registry = new SimpleMeterRegistry();
-            configuration.executorQueueMetrics(evaluation, retrieval, tool).bindTo(registry);
+            configuration.executorQueueMetrics(evaluation, retrieval, tool, agentWorker).bindTo(registry);
             assertEquals(100, registry.get("rag2agent.executor.queue.capacity")
                     .tag("executor", "evaluation").gauge().value(), 0.1);
             assertEquals(32, registry.get("rag2agent.executor.queue.capacity")
                     .tag("executor", "retrieval").gauge().value(), 0.1);
             assertEquals(0, registry.get("rag2agent.executor.queue.depth")
                     .tag("executor", "tool").gauge().value(), 0.1);
+            assertEquals(32, registry.get("rag2agent.executor.queue.capacity")
+                    .tag("executor", "agent-worker").gauge().value(), 0.1);
         } finally {
             evaluation.shutdown();
             retrieval.shutdown();
             tool.shutdown();
+            agentWorker.shutdown();
         }
     }
 }

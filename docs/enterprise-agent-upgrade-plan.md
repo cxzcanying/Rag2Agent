@@ -549,8 +549,10 @@ Neo4j 关系：
 - 已提供 `search_agent_memory` 只读工具和需要人工审批的 `save_agent_memory` 写入工具。
 - 记忆检索强制按用户过滤，知识库记忆在工具入口校验 owner；已提供记忆列表和删除 API。
 - 已新增持久 Agent 任务图和 `FOR UPDATE SKIP LOCKED` ready-task 抢占，支持依赖、完成/失败状态和任务查询 API。
-- 已实现受控 Coordinator → Retriever → Analyst → Reviewer 顺序执行器，每个 Worker 使用独立提示词与上下文，Reviewer 独立复核最终答案。
-- 待完成并行 Worker、预算分配、记忆冲突处理和 Skill 注册。
+- Retriever 完成证据召回后，Coordinator 并行启动 2~4 个独立 Analyst Worker；Worker 之间不共享推理过程，由 Reviewer 汇总草稿、冲突和证据缺口。
+- 每个 Worker 配置独立的 Token、工具次数和时长预算，预算与耗时写入任务输出；Reviewer 只依赖成功完成的分析任务。
+- 单个 Analyst 超时、失败或超预算时隔离该任务并保留其他结果，运行状态返回 `DEGRADED`；全部分析失败才终止。
+- 待完成取消传播、死锁检测、记忆冲突处理和 Skill 注册。
 
 ### Phase 7：企业治理与发布
 

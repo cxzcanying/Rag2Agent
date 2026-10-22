@@ -107,6 +107,10 @@ rag2agent:
     max-tool-calls: ${RAG2AGENT_MAX_TOOL_CALLS:20}
     approval-timeout-seconds: ${RAG2AGENT_APPROVAL_TIMEOUT_SECONDS:1800}
     reasoning-effort: ${RAG2AGENT_REASONING_EFFORT:off}
+    team-analyst-workers: ${RAG2AGENT_TEAM_ANALYST_WORKERS:2}
+    team-worker-token-budget: ${RAG2AGENT_TEAM_WORKER_TOKEN_BUDGET:12000}
+    team-worker-tool-budget: ${RAG2AGENT_TEAM_WORKER_TOOL_BUDGET:2}
+    team-worker-timeout-millis: ${RAG2AGENT_TEAM_WORKER_TIMEOUT_MILLIS:60000}
   application:
     name: RAG2Agent
     version: 0.1.0-SNAPSHOT
