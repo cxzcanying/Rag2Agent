@@ -220,6 +220,7 @@ GET  /api/documents/{id}/presign
 POST /api/documents/{id}/reingest
 GET  /api/documents/{documentId}/elements?version={version}&cursor={cursor}&limit={limit}
 GET  /api/documents/{documentId}/tables/{tableId}/rows?version={version}&cursor={cursor}&limit={limit}
+GET  /api/documents/{documentId}/assets/{assetId}?version={version}
 GET  /api/search?kbId={kbId}&query={query}&topK={topK}
 
 POST /api/chat                         # SSE

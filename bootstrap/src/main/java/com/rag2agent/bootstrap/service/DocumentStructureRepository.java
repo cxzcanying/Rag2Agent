@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.entity.DocumentMeta;
+import com.rag2agent.bootstrap.storage.MinioStorageService;
 import com.rag2agent.rag.core.document.StructuredDocument;
 import com.rag2agent.rag.core.document.StructuredDocument.Asset;
 import com.rag2agent.rag.core.document.StructuredDocument.BoundingBox;
@@ -11,6 +12,7 @@ import com.rag2agent.rag.core.document.StructuredDocument.Element;
 import com.rag2agent.rag.core.document.StructuredDocument.Row;
 import com.rag2agent.rag.core.document.StructuredDocument.Table;
 import java.util.ArrayList;
+import java.io.ByteArrayInputStream;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -24,10 +26,13 @@ public class DocumentStructureRepository {
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
+    private final MinioStorageService storage;
 
-    public DocumentStructureRepository(JdbcTemplate jdbc, ObjectMapper mapper) {
+    public DocumentStructureRepository(
+            JdbcTemplate jdbc, ObjectMapper mapper, MinioStorageService storage) {
         this.jdbc = jdbc;
         this.mapper = mapper;
+        this.storage = storage;
     }
 
     @Transactional
@@ -78,10 +83,27 @@ public class DocumentStructureRepository {
 
         List<Object[]> assets = new ArrayList<>();
         for (Asset asset : structured.assets()) {
+            String contentReference = asset.contentReference();
+            if (asset.binary() != null && asset.binary().length > 0) {
+                contentReference = "assets/" + document.getId() + "/" + version + "/"
+                        + asset.id().replace('/', '-');
+                try {
+                    storage.upload(
+                            contentReference,
+                            new ByteArrayInputStream(asset.binary()),
+                            asset.binary().length,
+                            asset.contentType() == null
+                                    ? "application/octet-stream"
+                                    : asset.contentType());
+                } catch (Exception exception) {
+                    throw new IllegalStateException("文档资产保存失败: " + asset.id(), exception);
+                }
+            }
             assets.add(new Object[] {
                     asset.id(), document.getId(), document.getKbId(), version, asset.id(),
-                    asset.type(), asset.title(), asset.contentReference(), asset.page(),
-                    bbox(asset.boundingBox()), "{}"
+                    asset.type(), asset.title(), contentReference, asset.page(),
+                    bbox(asset.boundingBox()), json(Map.of(
+                            "contentType", asset.contentType() == null ? "" : asset.contentType()))
             });
         }
         jdbc.batchUpdate("""
@@ -218,6 +240,33 @@ public class DocumentStructureRepository {
                 documentId, version, afterOrdinal, limit);
     }
 
+    public Optional<AssetRecord> findAsset(
+            Long documentId, int version, String assetId) {
+        List<AssetRecord> assets = jdbc.query("""
+                SELECT asset_id, asset_type, title, content_reference, page_no,
+                       CAST(bbox AS text) AS bbox, CAST(metadata AS text) AS metadata
+                FROM document_asset
+                WHERE document_id = ? AND version = ? AND asset_id = ?
+                """, (rs, rowNum) -> {
+                    String contentType = null;
+                    try {
+                        contentType = mapper.readTree(rs.getString("metadata"))
+                                .path("contentType").asText(null);
+                    } catch (JsonProcessingException exception) {
+                        throw new IllegalStateException("资产 metadata 解析失败", exception);
+                    }
+                    return new AssetRecord(
+                            rs.getString("asset_id"),
+                            rs.getString("asset_type"),
+                            rs.getString("title"),
+                            rs.getString("content_reference"),
+                            contentType,
+                            rs.getObject("page_no", Integer.class),
+                            boundingBox(rs.getString("bbox")));
+                }, documentId, version, assetId);
+        return assets.stream().findFirst();
+    }
+
     private List<String> stringList(String json) {
         try {
             return mapper.readValue(json, mapper.getTypeFactory()
@@ -269,4 +318,13 @@ public class DocumentStructureRepository {
             Integer pageTo,
             BoundingBox boundingBox,
             String text) {}
+
+    public record AssetRecord(
+            String assetId,
+            String assetType,
+            String title,
+            String contentReference,
+            String contentType,
+            Integer pageNo,
+            BoundingBox boundingBox) {}
 }

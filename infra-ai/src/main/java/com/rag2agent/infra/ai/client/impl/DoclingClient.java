@@ -55,8 +55,9 @@ public class DoclingClient implements DocumentIntelligenceClient {
                 .addFormDataPart("ocr_preset", properties.getOcrPreset())
                 .addFormDataPart("table_mode", properties.getTableMode())
                 .addFormDataPart("do_table_structure", "true")
+                .addFormDataPart("include_images", "true")
                 .addFormDataPart("include_page_images", "false")
-                .addFormDataPart("image_export_mode", "placeholder");
+                .addFormDataPart("image_export_mode", "embedded");
         for (String language : properties.getOcrLanguages()) {
             form.addFormDataPart("ocr_lang", language);
         }

@@ -8,6 +8,7 @@ import com.rag2agent.rag.core.document.StructuredDocument.Element;
 import com.rag2agent.rag.core.document.StructuredDocument.Row;
 import com.rag2agent.rag.core.document.StructuredDocument.Table;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -194,11 +195,28 @@ public final class DoclingDocumentMapper {
         JsonNode provenance = firstProvenance(item);
         String contentReference = text(item.path("image"), "uri",
                 text(item.path("image"), "path", text(item, "self_ref", "")));
+        byte[] imageBytes = null;
+        String contentType = null;
+        if (contentReference.startsWith("data:")) {
+            int separator = contentReference.indexOf(";base64,");
+            if (separator > 5) {
+                contentType = contentReference.substring(5, separator);
+                try {
+                    imageBytes = Base64.getDecoder().decode(
+                            contentReference.substring(separator + 8));
+                    contentReference = null;
+                } catch (IllegalArgumentException ignored) {
+                    imageBytes = null;
+                }
+            }
+        }
         return new Asset(
                 stableId(text(item, "self_ref", "picture")),
                 text(item, "label", "picture"),
                 captions.isEmpty() ? "" : captions.getFirst(),
                 contentReference,
+                imageBytes,
+                contentType,
                 integer(provenance, "page_no"),
                 boundingBox(provenance.path("bbox")));
     }

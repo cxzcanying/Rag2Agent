@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.rag.core.document.StructuredDocument;
+import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 
 class DoclingDocumentMapperTest {
@@ -128,5 +129,32 @@ class DoclingDocumentMapperTest {
         assertEquals(2, result.tables().getFirst().rows().size());
         assertEquals(2, result.tables().getFirst().rows().get(0).page());
         assertEquals(3, result.tables().getFirst().rows().get(1).page());
+    }
+
+    @Test
+    void decodesEmbeddedPictureContent() throws Exception {
+        JsonNode document = mapper.readTree("""
+                {
+                  "schema_name": "DoclingDocument",
+                  "version": "1.0",
+                  "body": {"children": [{"$ref": "#/pictures/0"}]},
+                  "texts": [],
+                  "tables": [],
+                  "pictures": [{
+                    "self_ref": "#/pictures/0",
+                    "label": "picture",
+                    "image": {"uri": "data:image/png;base64,YWJj"},
+                    "prov": [{"page_no": 1}]
+                  }],
+                  "pages": {"1": {"page_no": 1}}
+                }
+                """);
+
+        StructuredDocument result = new DoclingDocumentMapper().map("doc-1", document, "");
+
+        assertEquals("image/png", result.assets().getFirst().contentType());
+        assertEquals("abc", new String(
+                result.assets().getFirst().binary(), StandardCharsets.UTF_8));
+        assertEquals(null, result.assets().getFirst().contentReference());
     }
 }

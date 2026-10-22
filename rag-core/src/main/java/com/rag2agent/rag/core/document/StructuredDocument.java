@@ -116,6 +116,23 @@ public record StructuredDocument(
             String type,
             String title,
             String contentReference,
+            byte[] binary,
+            String contentType,
             Integer page,
-            BoundingBox boundingBox) {}
+            BoundingBox boundingBox) {
+
+        public Asset {
+            binary = binary == null ? null : binary.clone();
+        }
+
+        public Asset(
+                String id,
+                String type,
+                String title,
+                String contentReference,
+                Integer page,
+                BoundingBox boundingBox) {
+            this(id, type, title, contentReference, null, null, page, boundingBox);
+        }
+    }
 }
