@@ -42,13 +42,15 @@ class OpenAiVisionClientTest {
         server.enqueue(new MockResponse()
                 .setHeader("Content-Type", "application/json")
                 .setBody("""
-                        {"choices":[{"message":{"content":"图片显示收入增长。"}}]}
+                        {"choices":[{"message":{"content":"图片显示收入增长。"}}],
+                         "usage":{"prompt_tokens":120,"completion_tokens":12,"total_tokens":132}}
                         """));
 
         var result = client.describe(new VisionRequest(
                 "描述图片", new byte[] {1, 2, 3}, "image/png"));
 
         assertEquals("图片显示收入增长。", result.content());
+        assertEquals(132L, ((Number) result.usage().get("total_tokens")).longValue());
         RecordedRequest request = server.takeRequest();
         String body = request.getBody().readUtf8();
         assertTrue(body.contains("data:image/png;base64,AQID"));

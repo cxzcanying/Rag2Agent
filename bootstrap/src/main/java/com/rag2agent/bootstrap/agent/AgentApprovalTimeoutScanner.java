@@ -5,6 +5,7 @@ import com.rag2agent.bootstrap.config.RecoveryProperties;
 import com.rag2agent.bootstrap.entity.AgentRun;
 import com.rag2agent.bootstrap.mapper.AgentRunMapper;
 import com.rag2agent.bootstrap.mapper.ToolCallRecordMapper;
+import com.rag2agent.bootstrap.tenancy.TenantContext;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
 import org.slf4j.Logger;
@@ -49,6 +50,10 @@ public class AgentApprovalTimeoutScanner {
         if (!recoveryProperties.isEnabled()) {
             return;
         }
+        TenantContext.runAsSystem(this::scanAllTenants);
+    }
+
+    private void scanAllTenants() {
         long timeoutSeconds = agentProperties.getApprovalTimeoutSeconds();
         List<AgentRun> stale = runMapper.listStaleWaitingApproval(timeoutSeconds);
         for (AgentRun run : stale) {

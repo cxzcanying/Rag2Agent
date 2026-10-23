@@ -2,6 +2,7 @@ package com.rag2agent.infra.ai.client.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.rag2agent.infra.ai.client.VisionClient;
@@ -13,6 +14,7 @@ import com.rag2agent.infra.ai.model.VisionResult;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.io.IOException;
 import java.util.Base64;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
@@ -57,6 +59,16 @@ public class OpenAiVisionClient implements VisionClient {
     }
 
     @Override
+    public String providerName() {
+        return providerName;
+    }
+
+    @Override
+    public String modelName() {
+        return model;
+    }
+
+    @Override
     public VisionResult describe(VisionRequest request) {
         if (request.image().length == 0) {
             throw new IllegalArgumentException("图片内容不能为空");
@@ -89,7 +101,11 @@ public class OpenAiVisionClient implements VisionClient {
             if (text.isBlank()) {
                 throw new AiClientException("Vision 返回内容为空");
             }
-            return new VisionResult(text, providerName, model);
+            Map<String, Object> usage = json.path("usage").isObject()
+                    ? mapper.convertValue(
+                            json.path("usage"), new TypeReference<Map<String, Object>>() {})
+                    : Map.of();
+            return new VisionResult(text, providerName, model, usage);
         } catch (IOException exception) {
             throw new AiClientException("Vision 调用失败: " + exception.getMessage(), exception);
         } catch (AiClientException exception) {

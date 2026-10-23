@@ -13,12 +13,15 @@ public class DocumentMeta {
     @TableId(type = IdType.AUTO)
     private Long id;
     private Long kbId;
+    private Long tenantId;
     private String fileName;
     private String fileType;
     private String storagePath;
     private Long fileSize;
     private Integer version;
     private String status;
+    private String parserName;
+    private String qualityJson;
     private Instant createdAt;
     private Instant updatedAt;
 }

@@ -8,4 +8,12 @@ public interface VisionClient {
     boolean available();
 
     VisionResult describe(VisionRequest request);
+
+    default String providerName() {
+        return "vision";
+    }
+
+    default String modelName() {
+        return "configured";
+    }
 }

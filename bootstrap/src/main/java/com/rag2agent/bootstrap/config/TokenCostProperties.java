@@ -5,15 +5,19 @@ import java.time.Instant;
 import java.time.LocalTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "rag2agent.ai.cost")
 public class TokenCostProperties {
     private Map<String, Price> prices = new LinkedHashMap<>();
+    private double dailyBudgetUsd;
 
     public Map<String, Price> getPrices() { return prices; }
     public void setPrices(Map<String, Price> prices) { this.prices = prices == null ? new LinkedHashMap<>() : prices; }
+    public double getDailyBudgetUsd() { return dailyBudgetUsd; }
+    public void setDailyBudgetUsd(double value) { dailyBudgetUsd = Math.max(0, value); }
 
     public static class Price {
         private String version = "yaml-1";
@@ -25,6 +29,7 @@ public class TokenCostProperties {
         private double peakMultiplier = 1;
         private String peakWindowsUtc = "";
         private boolean peakWeekdaysOnly;
+        private List<String> offPeakDates = List.of();
         public String getVersion() { return version; }
         public void setVersion(String value) { version = value == null || value.isBlank() ? "yaml-1" : value; }
         public String getCurrency() { return currency; }
@@ -43,6 +48,10 @@ public class TokenCostProperties {
         public void setPeakWindowsUtc(String value) { peakWindowsUtc = value == null ? "" : value.trim(); }
         public boolean isPeakWeekdaysOnly() { return peakWeekdaysOnly; }
         public void setPeakWeekdaysOnly(boolean value) { peakWeekdaysOnly = value; }
+        public List<String> getOffPeakDates() { return offPeakDates; }
+        public void setOffPeakDates(List<String> value) {
+            offPeakDates = value == null ? List.of() : List.copyOf(value);
+        }
 
         public ResolvedPrice resolve(Instant instant) {
             boolean peak = isPeak(instant);
@@ -61,6 +70,7 @@ public class TokenCostProperties {
             var utc = instant.atZone(ZoneOffset.UTC);
             DayOfWeek day = utc.getDayOfWeek();
             if (peakWeekdaysOnly && (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY)) return false;
+            if (offPeakDates.contains(utc.toLocalDate().toString())) return false;
             LocalTime time = utc.toLocalTime();
             for (String window : peakWindowsUtc.split(",")) {
                 String[] bounds = window.trim().split("-", 2);

@@ -13,9 +13,11 @@ import com.rag2agent.framework.exception.BusinessException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class KnowledgeBaseService {
@@ -26,14 +28,20 @@ public class KnowledgeBaseService {
     private final KnowledgeBaseMapper kbMapper;
     private final AppUserMapper userMapper;
     private final JdbcTemplate jdbc;
+    private final SecurityAuditService audit;
 
     public KnowledgeBaseService(
-            KnowledgeBaseMapper kbMapper, AppUserMapper userMapper, JdbcTemplate jdbc) {
+            KnowledgeBaseMapper kbMapper,
+            AppUserMapper userMapper,
+            JdbcTemplate jdbc,
+            SecurityAuditService audit) {
         this.kbMapper = kbMapper;
         this.userMapper = userMapper;
         this.jdbc = jdbc;
+        this.audit = audit;
     }
 
+    @Transactional
     public KnowledgeBaseView create(Long userId, CreateKnowledgeBaseRequest request) {
         AppUser user = requireUser(userId);
         KnowledgeBase kb = new KnowledgeBase();
@@ -45,6 +53,8 @@ public class KnowledgeBaseService {
         kb.setVisibility(normalizeVisibility(request.visibility()));
         kb.setAccessRole("OWNER");
         kbMapper.insert(kb);
+        audit.allow(user.getTenantId(), userId, "KB_CREATE", "KNOWLEDGE_BASE", kb.getId(),
+                Map.of("visibility", kb.getVisibility()));
         return KnowledgeBaseView.from(kb);
     }
 
@@ -58,6 +68,8 @@ public class KnowledgeBaseService {
         AppUser user = requireUser(userId);
         requireKnowledgeBaseId(kbId);
         if (kbMapper.countReadable(kbId, userId, user.getTenantId(), user.getOrgId()) != 1) {
+            audit.deny(user.getTenantId(), userId, "KB_READ", "KNOWLEDGE_BASE", kbId,
+                    "ACCESS_DENIED", Map.of());
             throw new BusinessException(ErrorCode.NOT_FOUND, "知识库不存在");
         }
     }
@@ -66,6 +78,8 @@ public class KnowledgeBaseService {
         AppUser user = requireUser(userId);
         requireKnowledgeBaseId(kbId);
         if (kbMapper.countWritable(kbId, userId, user.getTenantId()) != 1) {
+            audit.deny(user.getTenantId(), userId, "KB_WRITE", "KNOWLEDGE_BASE", kbId,
+                    "ACCESS_DENIED", Map.of());
             throw new BusinessException(ErrorCode.NOT_FOUND, "知识库不存在");
         }
     }
@@ -74,20 +88,37 @@ public class KnowledgeBaseService {
         AppUser user = requireUser(userId);
         requireKnowledgeBaseId(kbId);
         if (kbMapper.countAdmin(kbId, userId, user.getTenantId()) != 1) {
+            audit.deny(user.getTenantId(), userId, "KB_ADMIN", "KNOWLEDGE_BASE", kbId,
+                    "ACCESS_DENIED", Map.of());
             throw new BusinessException(ErrorCode.NOT_FOUND, "知识库不存在");
         }
     }
 
+    public void requireOwner(Long userId, Long kbId) {
+        AppUser user = requireUser(userId);
+        requireKnowledgeBaseId(kbId);
+        if (kbMapper.countOwner(kbId, userId, user.getTenantId()) != 1) {
+            audit.deny(user.getTenantId(), userId, "KB_OWNER", "KNOWLEDGE_BASE", kbId,
+                    "ACCESS_DENIED", Map.of());
+            throw new BusinessException(ErrorCode.NOT_FOUND, "知识库不存在");
+        }
+    }
+
+    @Transactional
     public void updateVisibility(Long userId, Long kbId, String visibility) {
-        requireAdmin(userId, kbId);
+        requireOwner(userId, kbId);
+        AppUser actor = requireUser(userId);
+        String normalized = normalizeVisibility(visibility);
         int updated = jdbc.update("""
                 UPDATE knowledge_base
                 SET visibility = ?, updated_at = now()
-                WHERE id = ?
-                """, normalizeVisibility(visibility), kbId);
+                WHERE id = ? AND tenant_id = ? AND owner_user_id = ?
+                """, normalized, kbId, actor.getTenantId(), userId);
         if (updated != 1) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "知识库不存在");
         }
+        audit.allow(actor.getTenantId(), userId, "KB_VISIBILITY_UPDATE",
+                "KNOWLEDGE_BASE", kbId, Map.of("visibility", normalized));
     }
 
     public List<KnowledgeBaseMemberView> listMembers(Long userId, Long kbId) {
@@ -107,6 +138,7 @@ public class KnowledgeBaseService {
                 instant(rs.getTimestamp("created_at"))), kbId);
     }
 
+    @Transactional
     public KnowledgeBaseMemberView grant(
             Long userId, Long kbId, Long targetUserId, String username, String role) {
         requireAdmin(userId, kbId);
@@ -118,27 +150,57 @@ public class KnowledgeBaseService {
             throw new BusinessException(ErrorCode.NOT_FOUND, "目标用户不存在");
         }
         String normalizedRole = normalizeRole(role);
+        boolean owner = kbMapper.countOwner(kbId, userId, actor.getTenantId()) == 1;
+        if ("ADMIN".equals(normalizedRole) && !owner) {
+            audit.deny(actor.getTenantId(), userId, "KB_MEMBER_GRANT",
+                    "KNOWLEDGE_BASE", kbId,
+                    "ADMIN_GRANT_REQUIRES_OWNER",
+                    Map.of("targetUserId", target.getId(), "role", normalizedRole));
+            throw new BusinessException(ErrorCode.FORBIDDEN, "只有知识库 Owner 可以任命管理员");
+        }
         jdbc.update("""
                 INSERT INTO knowledge_base_member (kb_id, user_id, tenant_id, role)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT (kb_id, user_id)
                 DO UPDATE SET role = EXCLUDED.role, updated_at = now()
                 """, kbId, target.getId(), actor.getTenantId(), normalizedRole);
+        audit.allow(actor.getTenantId(), userId, "KB_MEMBER_GRANT",
+                "KNOWLEDGE_BASE", kbId,
+                Map.of("targetUserId", target.getId(), "role", normalizedRole));
         return new KnowledgeBaseMemberView(
                 target.getId(), target.getUsername(), target.getNickname(),
                 normalizedRole, Instant.now());
     }
 
+    @Transactional
     public boolean revoke(Long userId, Long kbId, Long targetUserId) {
         requireAdmin(userId, kbId);
-        return jdbc.update("""
+        AppUser actor = requireUser(userId);
+        boolean owner = kbMapper.countOwner(kbId, userId, actor.getTenantId()) == 1;
+        String targetRole = memberRole(kbId, targetUserId);
+        if ("OWNER".equals(targetRole)
+                || ("ADMIN".equals(targetRole) && !owner)) {
+            audit.deny(actor.getTenantId(), userId, "KB_MEMBER_REVOKE",
+                    "KNOWLEDGE_BASE", kbId,
+                    "ADMIN_REVOKE_REQUIRES_OWNER",
+                    Map.of("targetUserId", targetUserId, "role", targetRole));
+            throw new BusinessException(ErrorCode.FORBIDDEN, "只有知识库 Owner 可以撤销管理员");
+        }
+        boolean revoked = jdbc.update("""
                 DELETE FROM knowledge_base_member member
                 USING knowledge_base kb
                 WHERE member.kb_id = kb.id
                   AND kb.id = ?
+                  AND kb.tenant_id = ?
                   AND member.user_id = ?
                   AND member.user_id <> kb.owner_user_id
-                """, kbId, targetUserId) == 1;
+                """, kbId, actor.getTenantId(), targetUserId) == 1;
+        if (revoked) {
+            audit.allow(actor.getTenantId(), userId, "KB_MEMBER_REVOKE",
+                    "KNOWLEDGE_BASE", kbId,
+                    Map.of("targetUserId", targetUserId, "role", targetRole));
+        }
+        return revoked;
     }
 
     private AppUser requireUser(Long userId) {
@@ -189,5 +251,18 @@ public class KnowledgeBaseService {
 
     private Instant instant(java.sql.Timestamp timestamp) {
         return timestamp == null ? null : timestamp.toInstant();
+    }
+
+    private String memberRole(Long kbId, Long targetUserId) {
+        List<String> roles = jdbc.query("""
+                SELECT CASE
+                           WHEN kb.owner_user_id = member.user_id THEN 'OWNER'
+                           ELSE member.role
+                       END
+                FROM knowledge_base_member member
+                JOIN knowledge_base kb ON kb.id = member.kb_id
+                WHERE member.kb_id = ? AND member.user_id = ?
+                """, (rs, rowNum) -> rs.getString(1), kbId, targetUserId);
+        return roles.isEmpty() ? null : roles.getFirst();
     }
 }

@@ -21,9 +21,10 @@ public class IngestTaskService {
         this.taskMapper = taskMapper;
     }
 
-    public Long create(Long documentId) {
+    public Long create(Long documentId, Long tenantId) {
         IngestTask task = new IngestTask();
         task.setDocumentId(documentId);
+        task.setTenantId(tenantId);
         task.setStatus("PENDING");
         task.setRetryCount(0);
         taskMapper.insert(task);
@@ -66,6 +67,15 @@ public class IngestTaskService {
                 .set(IngestTask::getStatus, "INDEXED")
                 .set(IngestTask::getCurrentStage, "INDEXED")
                 .set(IngestTask::getErrorMessage, null));
+    }
+
+    public void markNeedsReview(Long taskId, String reason) {
+        taskMapper.update(null, new LambdaUpdateWrapper<IngestTask>()
+                .eq(IngestTask::getId, taskId)
+                .ne(IngestTask::getStatus, "INDEXED")
+                .set(IngestTask::getStatus, "NEEDS_REVIEW")
+                .set(IngestTask::getCurrentStage, "QUALITY_CHECK")
+                .set(IngestTask::getErrorMessage, truncate(reason)));
     }
 
     // 手动重试：重置任务为 PENDING，供 reingest 使用

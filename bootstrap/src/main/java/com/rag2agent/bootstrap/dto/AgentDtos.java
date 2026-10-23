@@ -6,6 +6,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.util.List;
+import java.math.BigDecimal;
 
 public final class AgentDtos {
 
@@ -43,4 +44,26 @@ public final class AgentDtos {
             String status,
             String answer,
             List<com.rag2agent.bootstrap.agent.Reference> references) {}
+
+    public record AgentComparisonRequest(
+            @NotNull(message = "kbId 不能为空") Long kbId,
+            @NotBlank(message = "query 不能为空")
+            @Size(max = 12000, message = "query 不能超过 12000 个字符") String query,
+            @Size(max = 12000, message = "expectedAnswer 不能超过 12000 个字符")
+            String expectedAnswer) {}
+
+    public record AgentComparisonResponse(
+            String query,
+            ComparisonRun singleAgent,
+            ComparisonRun multiAgent) {}
+
+    public record ComparisonRun(
+            Long runId,
+            String status,
+            String answer,
+            long latencyMs,
+            long requests,
+            long totalTokens,
+            BigDecimal totalCost,
+            Double answerMatch) {}
 }

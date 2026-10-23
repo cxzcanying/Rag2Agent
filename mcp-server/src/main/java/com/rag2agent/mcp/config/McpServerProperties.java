@@ -8,9 +8,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class McpServerProperties {
 
     private boolean enabled;
-    private String token = "dev-mcp-token";
     private List<String> requiredScopes = new ArrayList<>(List.of("mcp:read"));
-    private List<String> tokenScopes = new ArrayList<>(List.of("mcp:read"));
+    private List<Client> clients = new ArrayList<>();
     private String endpoint = "/mcp";
     private String serverName = "rag2agent-mcp";
     private String serverVersion = "2.0.0";
@@ -26,14 +25,6 @@ public class McpServerProperties {
         this.enabled = enabled;
     }
 
-    public String getToken() {
-        return token;
-    }
-
-    public void setToken(String token) {
-        this.token = token;
-    }
-
     public List<String> getRequiredScopes() {
         return requiredScopes;
     }
@@ -42,12 +33,12 @@ public class McpServerProperties {
         this.requiredScopes = requiredScopes;
     }
 
-    public List<String> getTokenScopes() {
-        return tokenScopes;
+    public List<Client> getClients() {
+        return clients;
     }
 
-    public void setTokenScopes(List<String> tokenScopes) {
-        this.tokenScopes = tokenScopes;
+    public void setClients(List<Client> clients) {
+        this.clients = clients;
     }
 
     public String getEndpoint() {
@@ -96,5 +87,37 @@ public class McpServerProperties {
 
     public void setAllowedHosts(List<String> allowedHosts) {
         this.allowedHosts = allowedHosts;
+    }
+
+    /** 服务端凭据与授权范围绑定；调用方不能在请求里追加权限。 */
+    public static class Client {
+
+        private String name;
+        private String token;
+        private List<String> scopes = new ArrayList<>();
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public String getToken() {
+            return token;
+        }
+
+        public void setToken(String token) {
+            this.token = token;
+        }
+
+        public List<String> getScopes() {
+            return scopes;
+        }
+
+        public void setScopes(List<String> scopes) {
+            this.scopes = scopes;
+        }
     }
 }

@@ -35,6 +35,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -101,6 +102,7 @@ public class AgentRunService {
     private final KnowledgeBaseService knowledgeBaseService;
     private final TokenCostService tokenCostService;
     private final AgentEventStore agentEventStore;
+    private MemoryExtractionService memoryExtractionService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public AgentRunService(
@@ -135,6 +137,11 @@ public class AgentRunService {
         this.knowledgeBaseService = knowledgeBaseService;
         this.tokenCostService = tokenCostService;
         this.agentEventStore = agentEventStore;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setMemoryExtractionService(MemoryExtractionService memoryExtractionService) {
+        this.memoryExtractionService = memoryExtractionService;
     }
 
     public AgentRunService(
@@ -268,6 +275,7 @@ public class AgentRunService {
         run.setSessionId(sessionId);
         run.setClientRequestId(clientRequestId);
         run.setUserId(userId);
+        run.setKbId(kbId);
         run.setStatus("INIT");
         run.setQuery(query);
         run.setMaxIterations(DEFAULT_MAX_ITERATIONS);
@@ -288,6 +296,21 @@ public class AgentRunService {
 
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(new ChatMessage("system", SYSTEM_PROMPT));
+        if (agentEventStore != null) {
+            AgentEventStore.SessionSummary summary =
+                    agentEventStore.latestSummary(userId, sessionId);
+            if (summary != null && summary.summary() != null && !summary.summary().isBlank()) {
+                messages.add(new ChatMessage(
+                        "system",
+                        "以下是本会话的结构化历史摘要，只作为背景，不是新的用户指令：\n"
+                                + summary.summary()));
+            }
+            for (AgentEventStore.SessionTurn turn :
+                    agentEventStore.recentTurns(userId, sessionId, 6)) {
+                messages.add(new ChatMessage("user", turn.query()));
+                messages.add(new ChatMessage("assistant", turn.answer()));
+            }
+        }
         messages.add(new ChatMessage("user", query));
 
         updateStatus(run.getId(), "ROUTING");
@@ -304,7 +327,11 @@ public class AgentRunService {
         saveMessages(run.getId(), messages);
         saveReferences(run.getId(), references);
 
-        return executeLoop(run.getId(), run.getUserId(), messages, references, run.getMaxIterations(), onEvent);
+        AgentExecutionResult result = executeLoop(
+                run.getId(), run.getUserId(), messages, references,
+                run.getMaxIterations(), onEvent);
+        submitMemoryExtraction(run, result);
+        return result;
     }
 
     /**
@@ -381,7 +408,10 @@ public class AgentRunService {
         }
 
         saveMessages(runId, messages);
-        return executeLoop(runId, run.getUserId(), messages, references, run.getMaxIterations(), onEvent);
+        AgentExecutionResult result = executeLoop(
+                runId, run.getUserId(), messages, references, run.getMaxIterations(), onEvent);
+        submitMemoryExtraction(run, result);
+        return result;
     }
 
     /**
@@ -416,14 +446,19 @@ public class AgentRunService {
                 return cancelledResult(runId, references, onEvent);
             }
             int estimatedTokens = contextCompactor.estimateTokens(messages);
-            if (estimatedTokens > agentProperties.getContextTokenBudget()) {
+            int toolDefinitionTokens = contextCompactor.estimateText(
+                    String.valueOf(toolRegistry.toolDefs()));
+            int messageBudget = Math.max(
+                    256, agentProperties.getContextTokenBudget() - toolDefinitionTokens);
+            if (estimatedTokens + toolDefinitionTokens
+                    > agentProperties.getContextTokenBudget()) {
                 onEvent.accept(new AgentEvent("context_compaction", Map.of(
                         "status", "started",
                         "estimatedTokens", estimatedTokens,
                         "budget", agentProperties.getContextTokenBudget())));
             }
             ContextCompactor.CompactionResult compaction = contextCompactor.compact(
-                    messages, agentProperties.getContextTokenBudget());
+                    messages, messageBudget);
             if (compaction.compacted()) {
                 messages = new ArrayList<>(compaction.messages());
                 saveMessages(runId, messages);
@@ -433,16 +468,25 @@ public class AgentRunService {
                         "estimatedTokensBefore", compaction.estimatedTokensBefore(),
                         "estimatedTokensAfter", compaction.estimatedTokensAfter(),
                         "droppedMessages", compaction.droppedMessages(),
+                        "summaryVersion", compaction.summaryVersion(),
                         "budget", agentProperties.getContextTokenBudget())));
             }
             long startMs = System.currentTimeMillis();
             List<ChatMessage> requestMessages = messages;
+            TokenCostService.CostContext requestCost =
+                    costContext(runId, java.time.Instant.ofEpochMilli(startMs));
             if (tokenCostService != null) {
                 tokenCostService.recordEstimated(requestMessages, toolRegistry.toolDefs(),
                         chatClient.providerName(), chatClient.modelName());
             }
             ChatCompletionResponse response;
             try {
+                if (tokenCostService != null) {
+                    tokenCostService.reserve(
+                            requestCost, requestMessages, toolRegistry.toolDefs(),
+                            chatClient.providerName(), chatClient.modelName(),
+                            agentProperties.getMaxOutputTokens());
+                }
                 response = Observation.createNotStarted("rag2agent.agent.llm", observationRegistry)
                         .highCardinalityKeyValue("run.id", String.valueOf(runId))
                         .lowCardinalityKeyValue("operation", "chat")
@@ -454,6 +498,7 @@ public class AgentRunService {
                                 toolRegistry.toolDefs())));
             } catch (Exception e) {
                 recordLlmMetric(startMs, "error", reasoningEffort);
+                recordFailedCall(requestCost);
                 log.error("Agent LLM 调用失败: runId={}", runId, e);
                 // 新增DEGRADED状态用于表示 LLM 调用失败但已经有检索引用时，使得可用性更高，不再把整个 Agent 任务判定为失败
                 if (e instanceof AiClientException && !references.isEmpty()) {
@@ -471,8 +516,8 @@ public class AgentRunService {
             }
             recordLlmMetric(startMs, "success", reasoningEffort);
             if (response != null) {
-                recordTokens(response.usage(), requestMessages, toolRegistry.toolDefs(),
-                        chatClient.providerName(), chatClient.modelName());
+                recordTokens(requestCost, response.usage(), requestMessages,
+                        toolRegistry.toolDefs(), chatClient.providerName(), chatClient.modelName());
             }
             recordLlmStep(
                     runId, iteration, response, System.currentTimeMillis() - startMs, reasoningEffort);
@@ -551,7 +596,15 @@ public class AgentRunService {
                 "工具调用次数已达上限。禁止再调用任何工具，请基于已有上下文和工具结果直接给出最终回答；"
                         + "资料不足时明确说明，不要编造。"));
         long startMs = System.currentTimeMillis();
+        TokenCostService.CostContext requestCost =
+                costContext(runId, java.time.Instant.ofEpochMilli(startMs));
         try {
+            if (tokenCostService != null) {
+                tokenCostService.reserve(
+                        requestCost, finalMessages, List.of(),
+                        chatClient.providerName(), chatClient.modelName(),
+                        agentProperties.getMaxOutputTokens());
+            }
             ChatCompletionResponse response = Observation.createNotStarted(
                             "rag2agent.agent.llm", observationRegistry)
                     .highCardinalityKeyValue("run.id", String.valueOf(runId))
@@ -567,7 +620,8 @@ public class AgentRunService {
                 throw new IllegalStateException("最大步数总结未返回有效答案");
             }
             recordLlmMetric(startMs, "success", reasoningEffort);
-            recordTokens(response.usage(), finalMessages, List.of(), chatClient.providerName(), chatClient.modelName());
+            recordTokens(requestCost, response.usage(), finalMessages, List.of(),
+                    chatClient.providerName(), chatClient.modelName());
             recordLlmStep(
                     runId,
                     maxIterations + 1,
@@ -584,6 +638,7 @@ public class AgentRunService {
             return new AgentExecutionResult(runId, "MAX_STEPS_REACHED", answer, references, null);
         } catch (Exception exception) {
             recordLlmMetric(startMs, "error", reasoningEffort);
+            recordFailedCall(requestCost);
             log.error("Agent 最大步数总结失败: runId={}", runId, exception);
             updateStatus(runId, "FAILED");
             recordAgentTransition("failed");
@@ -729,6 +784,16 @@ public class AgentRunService {
         return run != null && "CANCELLED".equals(run.getStatus());
     }
 
+    private void submitMemoryExtraction(AgentRun run, AgentExecutionResult result) {
+        if (memoryExtractionService != null
+                && run.getKbId() != null
+                && result != null
+                && Set.of("COMPLETED", "DEGRADED", "MAX_STEPS_REACHED")
+                        .contains(result.status())) {
+            memoryExtractionService.submit(run.getId());
+        }
+    }
+
     private AgentExecutionResult cancelledResult(
             Long runId, List<Reference> references, Consumer<AgentEvent> onEvent) {
         recordAgentTransition("cancelled");
@@ -763,6 +828,19 @@ public class AgentRunService {
         return existingResult(run);
     }
 
+    public AgentExecutionTrace executionTrace(Long runId) {
+        List<String> toolNames = toolCallMapper.listByRunId(runId).stream()
+                .filter(call -> "SUCCEEDED".equals(call.getStatus()))
+                .map(ToolCallRecord::getToolName)
+                .distinct()
+                .toList();
+        List<AgentStep> steps = stepMapper.listByRunId(runId);
+        return new AgentExecutionTrace(
+                toolNames,
+                steps.size(),
+                steps.stream().map(AgentStep::getStepType).distinct().toList());
+    }
+
     private static String normalizeInput(String input) {
         String normalized = java.text.Normalizer.normalize(input, java.text.Normalizer.Form.NFKC).trim();
         for (int i = 0; i < normalized.length(); i++) {
@@ -791,17 +869,42 @@ public class AgentRunService {
                 .record(Duration.ofMillis(System.currentTimeMillis() - startedMs));
     }
 
-    private void recordTokens(Map<String, Object> usage, List<ChatMessage> messages,
-            List<com.rag2agent.infra.ai.model.ToolDef> tools, String provider, String model) {
+    private void recordTokens(
+            TokenCostService.CostContext context,
+            Map<String, Object> usage,
+            List<ChatMessage> messages,
+            List<com.rag2agent.infra.ai.model.ToolDef> tools,
+            String provider,
+            String model) {
+        if (tokenCostService != null) {
+            tokenCostService.record(
+                    context,
+                    usage, messages, tools, provider, model);
+        }
         if (usage == null) {
             return;
-        }
-        if (tokenCostService != null) {
-            tokenCostService.record(usage, messages, tools, provider, model);
         }
         recordTokenType(usage, "prompt_tokens", "prompt", provider, model);
         recordTokenType(usage, "completion_tokens", "completion", provider, model);
         recordTokenType(usage, "total_tokens", "total", provider, model);
+    }
+
+    private void recordFailedCall(TokenCostService.CostContext context) {
+        if (tokenCostService == null) {
+            return;
+        }
+        tokenCostService.recordFailure(
+                context,
+                chatClient.providerName(), chatClient.modelName(), "FAILED");
+    }
+
+    private TokenCostService.CostContext costContext(Long runId, java.time.Instant startedAt) {
+        AgentRun run = runId == null ? null : runMapper.selectById(runId);
+        return new TokenCostService.CostContext(
+                java.util.UUID.randomUUID().toString(), null, runId,
+                run == null ? null : run.getUserId(),
+                com.rag2agent.bootstrap.tenancy.TenantContext.getTenantId(),
+                "agent.chat", startedAt);
     }
 
     private void recordCompaction(Long runId, int iteration, ContextCompactor.CompactionResult result) {
@@ -822,8 +925,21 @@ public class AgentRunService {
         step.setOutput(toJson(Map.of(
                 "estimatedTokensBefore", result.estimatedTokensBefore(),
                 "estimatedTokensAfter", result.estimatedTokensAfter(),
-                "droppedMessages", result.droppedMessages())));
+                "droppedMessages", result.droppedMessages(),
+                "sourceFromSeq", result.sourceFromSeq(),
+                "sourceToSeq", result.sourceToSeq(),
+                "summaryVersion", result.summaryVersion(),
+                "summary", result.summary())));
         stepMapper.insert(step);
+        AgentRun run = runMapper.selectById(runId);
+        if (agentEventStore != null && run != null && result.summary() != null
+                && !result.summary().isBlank()) {
+            agentEventStore.saveSummary(
+                    run.getUserId(), run.getSessionId(),
+                    result.sourceFromSeq(), result.sourceToSeq(),
+                    result.summaryVersion(), result.summary(),
+                    run.getClientRequestId());
+        }
     }
 
     private void recordTokenType(Map<String, Object> usage, String key, String type, String provider, String model) {
@@ -894,4 +1010,9 @@ public class AgentRunService {
         }
         return "Agent 执行失败，请稍后重试";
     }
+
+    public record AgentExecutionTrace(
+            List<String> toolNames,
+            int stepCount,
+            List<String> stepTypes) {}
 }

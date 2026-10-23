@@ -9,6 +9,7 @@ import io.micrometer.observation.ObservationRegistry;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import com.rag2agent.bootstrap.observability.MqTracePropagation;
+import com.rag2agent.bootstrap.tenancy.TenantContext;
 import org.apache.rocketmq.client.consumer.DefaultMQPushConsumer;
 import org.apache.rocketmq.client.consumer.listener.ConsumeConcurrentlyStatus;
 import org.apache.rocketmq.client.consumer.listener.MessageListenerConcurrently;
@@ -56,7 +57,12 @@ public class RocketMqConsumerConfig {
                             .lowCardinalityKeyValue("messaging.system", "rocketmq");
                     Context parent = MqTracePropagation.extract(message);
                     try (Scope ignored = parent.makeCurrent()) {
-                        observation.observe(() -> pipelineService.process(documentId, taskMessage.taskId()));
+                        if (taskMessage.tenantId() == null || taskMessage.tenantId() <= 0) {
+                            throw new IllegalArgumentException("入库消息缺少 tenantId");
+                        }
+                        TenantContext.runAs(taskMessage.tenantId(),
+                                () -> observation.observe(
+                                        () -> pipelineService.process(documentId, taskMessage.taskId())));
                     }
                     log.info("入库任务消费完成: documentId={}, traceId={}", documentId, traceId);
                 } catch (Exception e) {
@@ -88,6 +94,6 @@ public class RocketMqConsumerConfig {
         if (documentId <= 0) {
             throw new IllegalArgumentException("入库消息 documentId 无效");
         }
-        return new IngestTaskMessage(documentId, null);
+        return new IngestTaskMessage(documentId, null, null);
     }
 }

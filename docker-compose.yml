@@ -40,8 +40,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-rag2agent}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-rag2agent-password}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${MINIO_API_PORT:-19000}:9000"
+      - "${MINIO_CONSOLE_PORT:-19001}:9001"
     volumes:
       - minio-data:/data
     healthcheck:

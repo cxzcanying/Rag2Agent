@@ -5,6 +5,7 @@ import com.rag2agent.framework.common.ErrorCode;
 import com.rag2agent.framework.exception.BusinessException;
 import com.rag2agent.infra.ai.model.ChatCompletionResponse;
 import com.rag2agent.infra.ai.model.ChatMessage;
+import com.rag2agent.infra.ai.model.ToolDef;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,8 +38,13 @@ final class AgentWorkerBudget {
     }
 
     int beginModel(List<ChatMessage> messages) {
+        return beginModel(messages, List.of());
+    }
+
+    int beginModel(List<ChatMessage> messages, List<ToolDef> tools) {
         checkTime();
-        int promptTokens = compactor.estimateTokens(messages);
+        int promptTokens = compactor.estimateTokens(messages)
+                + compactor.estimateText(String.valueOf(tools));
         int available = tokenLimit - tokensUsed;
         if (promptTokens >= available) {
             throw exceeded("Token");

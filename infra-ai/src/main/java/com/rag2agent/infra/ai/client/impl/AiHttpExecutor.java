@@ -73,7 +73,7 @@ final class AiHttpExecutor {
             String modelName) {
         this.properties = properties;
         this.meterRegistry = meterRegistry;
-        this.concurrency = new Semaphore(properties.getMaxConcurrentRequests());
+        this.concurrency = new Semaphore(properties.getMaxConcurrentRequests(), true);
         this.providerName = normalizeTag(providerName, "unknown");
         this.modelName = normalizeTag(modelName, "configured");
     }
@@ -110,7 +110,8 @@ final class AiHttpExecutor {
         try {
             // 尝试获取信号量许可（非阻塞）
             // 若获取失败，说明并发数已达上限 → 触发舱壁拒绝
-            permit = concurrency.tryAcquire();
+            permit = concurrency.tryAcquire(
+                    properties.getQueueTimeoutMillis(), TimeUnit.MILLISECONDS);
             if (!permit) {
                 resetHalfOpenProbe();  // 舱壁拒绝时重置半开探测标记
                 count(operation, "bulkhead_rejected");
@@ -119,6 +120,13 @@ final class AiHttpExecutor {
             }
             // 执行带重试的请求
             return executeWithRetry(client, request, operation);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            resetHalfOpenProbe();
+            count(operation, "bulkhead_interrupted");
+            throw new AiClientException(
+                    operation + " 等待模型并发槽时被中断",
+                    exception, AiClientException.Kind.BULKHEAD_REJECTED, 503, 1);
         } finally {
             // 释放信号量许可（只有获取成功时才释放）
             if (permit) {

@@ -10,7 +10,11 @@ import com.rag2agent.bootstrap.dto.EvaluationDtos.GoldSetViolation;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunStatus;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunSubmission;
 import com.rag2agent.bootstrap.dto.EvaluationDtos.RunSummary;
+import com.rag2agent.bootstrap.agent.AgentExecutionResult;
+import com.rag2agent.bootstrap.agent.AgentRunService;
+import com.rag2agent.bootstrap.agent.Reference;
 import com.rag2agent.bootstrap.service.HybridSearchService;
+import com.rag2agent.bootstrap.tenancy.TenantContext;
 import com.rag2agent.framework.common.ErrorCode;
 import com.rag2agent.framework.exception.BusinessException;
 import com.rag2agent.infra.ai.client.ChatModelClient;
@@ -76,6 +80,11 @@ public class EvaluationService {
     private final ObjectMapper objectMapper;
     private final MeterRegistry meterRegistry;
     private final Executor evaluationTaskExecutor;
+    private com.rag2agent.bootstrap.service.TokenCostService tokenCostService;
+    private LangfuseEvaluationPublisher langfusePublisher;
+    private AgentRunService agentRunService;
+    private EvaluationScenarioEvidenceService scenarioEvidenceService;
+    private LangfuseDatasetClient langfuseDatasetClient;
 
     public EvaluationService(
             EvaluationRepository repository,
@@ -90,6 +99,31 @@ public class EvaluationService {
         this.objectMapper = objectMapper;
         this.meterRegistry = meterRegistry;
         this.evaluationTaskExecutor = evaluationTaskExecutor;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setTokenCostService(com.rag2agent.bootstrap.service.TokenCostService tokenCostService) {
+        this.tokenCostService = tokenCostService;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setLangfusePublisher(LangfuseEvaluationPublisher langfusePublisher) {
+        this.langfusePublisher = langfusePublisher;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setAgentRunService(AgentRunService agentRunService) {
+        this.agentRunService = agentRunService;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setScenarioEvidenceService(EvaluationScenarioEvidenceService scenarioEvidenceService) {
+        this.scenarioEvidenceService = scenarioEvidenceService;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setLangfuseDatasetClient(LangfuseDatasetClient langfuseDatasetClient) {
+        this.langfuseDatasetClient = langfuseDatasetClient;
     }
 
     /**
@@ -107,6 +141,22 @@ public class EvaluationService {
                     ErrorCode.BAD_REQUEST, violations.getFirst().message());
         }
         return repository.insertCases(kbId, cases);
+    }
+
+    public int importLangfuseCases(Long kbId, String datasetName) {
+        if (langfuseDatasetClient == null) {
+            throw new BusinessException(
+                    ErrorCode.UPSTREAM_UNAVAILABLE, "Langfuse dataset 客户端未启用");
+        }
+        List<CaseInput> cases;
+        try {
+            cases = langfuseDatasetClient.fetchCases(datasetName);
+        } catch (RuntimeException exception) {
+            throw new BusinessException(
+                    ErrorCode.UPSTREAM_UNAVAILABLE,
+                    "Langfuse dataset 拉取失败: " + safeErrorMessage(exception));
+        }
+        return importCases(kbId, cases);
     }
 
     public GoldSetCoverage goldSetCoverage(Long kbId) {
@@ -221,6 +271,10 @@ public class EvaluationService {
      * @param runId 任务ID
      */
     private void executeRun(long runId) {
+        TenantContext.runAsSystem(() -> executeRunInternal(runId));
+    }
+
+    private void executeRunInternal(long runId) {
         // CAS 更新状态：只有 QUEUED 状态才能变为 RUNNING，防止重复执行
         if (!repository.markRunning(runId)) {
             return;
@@ -252,7 +306,8 @@ public class EvaluationService {
                     continue; // 跳过已完成的用例
                 }
                 // 执行单个用例的评测
-                CaseResult result = evaluateCase(evalCase, config);
+                CaseResult result = evaluateCase(
+                        runId, run.ownerUserId(), evalCase, config);
                 if (!repository.isRunning(runId)) {
                     return;
                 }
@@ -273,7 +328,10 @@ public class EvaluationService {
             List<CaseResult> results = repository.listResults(runId);
 
             // 检索指标：计算所有用例的 firstRelevantRank，然后计算 Hit@K 和 MRR
-            List<Integer> firstRanks = results.stream().map(CaseResult::firstRelevantRank).toList();
+            List<Integer> firstRanks = results.stream()
+                    .filter(result -> !"INFRASTRUCTURE".equals(result.errorClass()))
+                    .map(CaseResult::firstRelevantRank)
+                    .toList();
             RetrievalMetrics metrics = RetrievalMetrics.calculate(firstRanks);
 
             // 生成质量指标：faithfulness 和 answerCorrectness 的平均值
@@ -290,6 +348,9 @@ public class EvaluationService {
                     runId, status, run.totalCases(),
                     metrics.hitAtK(), metrics.mrr(),
                     faithfulness, answerCorrectness, null);
+            if (langfusePublisher != null) {
+                langfusePublisher.publish(run, results, metrics.hitAtK(), metrics.mrr());
+            }
 
             // 记录监控指标
             recordRunMetric(runTimer, status);
@@ -365,12 +426,27 @@ public class EvaluationService {
      * @param config    评测配置
      * @return 用例评测结果
      */
-    private CaseResult evaluateCase(EvaluationRepository.EvalCase evalCase, EvaluationConfig config) {
+    private CaseResult evaluateCase(
+            long runId,
+            Long ownerUserId,
+            EvaluationRepository.EvalCase evalCase,
+            EvaluationConfig config) {
         long started = System.nanoTime();
+        String caseType = evalCase.caseType() == null
+                ? "RAG" : evalCase.caseType().toUpperCase(java.util.Locale.ROOT);
         try {
+            if ("AGENT".equals(caseType)
+                    && agentRunService != null
+                    && ownerUserId != null) {
+                return evaluateAgentCase(
+                        runId, ownerUserId, evalCase, config, started);
+            }
             // 1. 执行检索
             List<RetrievalResult> retrieved = searchService.search(
                     evalCase.kbId(), evalCase.question(), config.toSearchOptions());
+            if (scenarioEvidenceService != null) {
+                retrieved = scenarioEvidenceService.augment(evalCase, retrieved);
+            }
 
             // 提取返回文档的 documentId 列表
             List<Long> returnedIds = retrieved.stream()
@@ -380,8 +456,13 @@ public class EvaluationService {
                     .distinct()
                     .toList();
 
-            // 2. 计算第一个相关文档的排名（用于 MRR 和 Hit@K）
-            int firstRank = firstRelevantRank(returnedIds, new HashSet<>(evalCase.goldenDocumentIds()));
+            // 2. 非 RAG 场景按可定位证据排名；同一文档里的错误行、资产或工具不能算命中。
+            int documentRank = firstRelevantRank(
+                    returnedIds, new HashSet<>(evalCase.goldenDocumentIds()));
+            Map<String, Object> evidenceResult =
+                    matchEvidence(caseType, evalCase.evidence(), retrieved, documentRank);
+            boolean evidenceHit = Boolean.TRUE.equals(evidenceResult.get("hit"));
+            int firstRank = ((Number) evidenceResult.get("firstRank")).intValue();
 
             // 3. 生成答案和裁判打分（如果配置要求）
             String answer = null;
@@ -390,9 +471,9 @@ public class EvaluationService {
 
             if (config.shouldEvaluateGeneration()) {
                 // 生成答案
-                answer = generateAnswer(evalCase.question(), retrieved);
+                answer = generateAnswer(runId, evalCase.question(), retrieved);
                 // 裁判打分
-                JudgeScores scores = judge(
+                JudgeScores scores = judge(runId,
                         evalCase.question(), evalCase.expectedAnswer(), answer, retrieved);
                 faithfulness = scores.faithfulness();
                 // 如果没有参考答案，则不计算 answerCorrectness
@@ -412,15 +493,226 @@ public class EvaluationService {
                     faithfulness,
                     answerCorrectness,
                     elapsedMs(started),
-                    null);
+                    null,
+                    caseType,
+                    evidenceHit,
+                    evidenceResult,
+                    null,
+                    org.slf4j.MDC.get("traceId"),
+                    chatClient.providerName(),
+                    chatClient.modelName(),
+                    "eval-judge-v1");
 
         } catch (Exception e) {
             // 用例执行失败，返回错误信息
+            String errorMessage = safeErrorMessage(e);
             return new CaseResult(
                     evalCase.id(), evalCase.question(), 0, 0.0,
                     List.of(), null, null, null,
-                    elapsedMs(started), e.getMessage());
+                    elapsedMs(started), errorMessage,
+                    caseType,
+                    false,
+                    Map.of("error", errorMessage),
+                    classifyError(e),
+                    org.slf4j.MDC.get("traceId"),
+                    chatClient.providerName(),
+                    chatClient.modelName(),
+                    "eval-judge-v1");
         }
+    }
+
+    private CaseResult evaluateAgentCase(
+            long runId,
+            Long ownerUserId,
+            EvaluationRepository.EvalCase evalCase,
+            EvaluationConfig config,
+            long started) {
+        String sessionId = "eval-" + runId + "-" + evalCase.id();
+        AgentExecutionResult execution = agentRunService.start(
+                ownerUserId, sessionId, evalCase.question(), evalCase.kbId(), event -> {});
+        AgentRunService.AgentExecutionTrace trace =
+                agentRunService.executionTrace(execution.runId());
+        if ("WAITING_APPROVAL".equals(execution.status())) {
+            try {
+                agentRunService.cancel(ownerUserId, execution.runId());
+            } catch (RuntimeException ignored) {
+                // 评测中的写操作不自动审批，取消失败仍按证据失败记录。
+            }
+        }
+        Map<String, Object> agentMetadata = new java.util.LinkedHashMap<>();
+        agentMetadata.put("toolNames", trace.toolNames());
+        agentMetadata.put("stepCount", trace.stepCount());
+        agentMetadata.put("stepTypes", trace.stepTypes());
+        agentMetadata.put("agentStatus", execution.status());
+        agentMetadata.put("runId", execution.runId());
+
+        List<RetrievalResult> retrieved = new ArrayList<>();
+        retrieved.add(new RetrievalResult(
+                "agent-run-" + execution.runId(),
+                execution.answer() == null ? "" : execution.answer(),
+                1.0,
+                Map.copyOf(agentMetadata)));
+        for (Reference reference : execution.references()) {
+            retrieved.add(new RetrievalResult(
+                    "agent-reference-" + reference.documentId() + "-" + reference.chunkIndex(),
+                    reference.content(), 0.9, reference.metadata()));
+        }
+        Map<String, Object> evidenceResult =
+                matchEvidence("AGENT", evalCase.evidence(), retrieved, 0);
+        boolean evidenceHit = Boolean.TRUE.equals(evidenceResult.get("hit"));
+        int firstRank = ((Number) evidenceResult.get("firstRank")).intValue();
+        List<Long> returnedIds = execution.references().stream()
+                .map(Reference::documentId)
+                .filter(id -> id != null && id > 0)
+                .distinct()
+                .toList();
+        String answer = execution.answer();
+        Double faithfulness = null;
+        Double answerCorrectness = null;
+        if (config.shouldEvaluateGeneration() && answer != null && !answer.isBlank()) {
+            JudgeScores scores = judge(
+                    runId, evalCase.question(), evalCase.expectedAnswer(), answer, retrieved);
+            faithfulness = scores.faithfulness();
+            answerCorrectness = evalCase.expectedAnswer() == null
+                    || evalCase.expectedAnswer().isBlank()
+                    ? null : scores.answerCorrectness();
+        }
+        return new CaseResult(
+                evalCase.id(),
+                evalCase.question(),
+                firstRank,
+                firstRank == 0 ? 0.0 : 1.0 / firstRank,
+                returnedIds,
+                answer,
+                faithfulness,
+                answerCorrectness,
+                elapsedMs(started),
+                null,
+                "AGENT",
+                evidenceHit,
+                evidenceResult,
+                null,
+                org.slf4j.MDC.get("traceId"),
+                chatClient.providerName(),
+                chatClient.modelName(),
+                "eval-judge-v1");
+    }
+
+    static Map<String, Object> matchEvidence(
+            String caseType,
+            Map<String, Object> expected,
+            List<RetrievalResult> retrieved,
+            int documentRank) {
+        List<Map<String, Object>> metadata = retrieved.stream()
+                .map(RetrievalResult::metadata)
+                .toList();
+        int firstRank = switch (caseType) {
+            case "TABLE" -> firstMatchingRank(metadata, expected, "tableId", "rowIds", "headers");
+            case "MULTIMODAL" -> firstMatchingRank(metadata, expected, "assetIds");
+            case "GRAPH" -> firstGraphRank(metadata, expected);
+            case "AGENT" -> firstAgentRank(metadata, expected);
+            default -> documentRank;
+        };
+        boolean hit = firstRank > 0;
+        return Map.of(
+                "hit", hit,
+                "firstRank", firstRank,
+                "caseType", caseType,
+                "expected", expected == null ? Map.of() : expected,
+                "candidates", metadata.stream().limit(10).map(Object::toString).toList());
+    }
+
+    private static int firstMatchingRank(
+            List<Map<String, Object>> candidates,
+            Map<String, Object> expected,
+            String... keys) {
+        if (expected == null || expected.isEmpty()) {
+            return 0;
+        }
+        for (int index = 0; index < candidates.size(); index++) {
+            Map<String, Object> candidate = candidates.get(index);
+            boolean matched = true;
+            for (String key : keys) {
+                Object value = expected.get(key);
+                if (value == null) {
+                    matched = false;
+                    break;
+                }
+                if (!valuePresent(candidate.get(key), value)
+                        && !String.valueOf(candidate).contains(String.valueOf(value))) {
+                    matched = false;
+                    break;
+                }
+            }
+            if (matched) {
+                return index + 1;
+            }
+        }
+        return 0;
+    }
+
+    private static int firstGraphRank(
+            List<Map<String, Object>> candidates, Map<String, Object> expected) {
+        if (expected == null || !(expected.get("entities") instanceof List<?> entities)
+                || entities.isEmpty()) {
+            return 0;
+        }
+        for (int index = 0; index < candidates.size(); index++) {
+            Map<String, Object> candidate = candidates.get(index);
+            if (!"graph".equals(candidate.get("retrievalSource"))) {
+                continue;
+            }
+            if (valuePresent(candidate.get("graphNodes"), entities)) {
+                return index + 1;
+            }
+        }
+        return 0;
+    }
+
+    private static int firstAgentRank(
+            List<Map<String, Object>> candidates, Map<String, Object> expected) {
+        if (expected == null || !(expected.get("requiredTools") instanceof List<?> tools)
+                || tools.isEmpty()) {
+            return 0;
+        }
+        for (int index = 0; index < candidates.size(); index++) {
+            Map<String, Object> candidate = candidates.get(index);
+            Object status = candidate.get("agentStatus");
+            if (status != null && !Set.of(
+                    "COMPLETED", "DEGRADED", "MAX_STEPS_REACHED")
+                    .contains(String.valueOf(status))) {
+                continue;
+            }
+            Object maxSteps = expected.get("maxSteps");
+            if (maxSteps instanceof Number limit
+                    && candidate.get("stepCount") instanceof Number actual
+                    && actual.intValue() > limit.intValue()) {
+                continue;
+            }
+            if (valuePresent(candidate.get("toolNames"), tools)) {
+                return index + 1;
+            }
+        }
+        return 0;
+    }
+
+    private static boolean valuePresent(Object actual, Object expected) {
+        if (actual instanceof List<?> actualList && expected instanceof List<?> expectedList) {
+            List<String> values = actualList.stream().map(String::valueOf).toList();
+            return expectedList.stream().map(String::valueOf).allMatch(values::contains);
+        }
+        return actual != null && String.valueOf(actual).contains(String.valueOf(expected));
+    }
+
+    private String classifyError(Exception exception) {
+        if (exception instanceof com.rag2agent.infra.ai.exception.AiClientException
+                || exception instanceof org.springframework.dao.DataAccessException
+                || exception instanceof java.net.SocketException
+                || exception instanceof java.io.IOException
+                || exception instanceof java.util.concurrent.TimeoutException) {
+            return "INFRASTRUCTURE";
+        }
+        return "BUSINESS";
     }
 
     /**
@@ -430,12 +722,32 @@ public class EvaluationService {
      * @param retrieved  检索到的相关文档列表
      * @return 模型生成的答案
      */
-    private String generateAnswer(String question, List<RetrievalResult> retrieved) {
+    private String generateAnswer(
+            long runId, String question, List<RetrievalResult> retrieved) {
         List<ChatMessage> messages = List.of(
                 new ChatMessage("system", GENERATION_SYSTEM),
                 new ChatMessage("user", "资料：\n" + context(retrieved) + "\n\n问题：" + question));
-        ChatCompletionResponse response = chatClient.complete(new ChatCompletionRequest(
-                chatClient.providerName(), null, messages, Map.of("temperature", 0.0)));
+        java.time.Instant startedAt = java.time.Instant.now();
+        var costContext = costContext(runId, "evaluation.generation", startedAt);
+        if (tokenCostService != null) {
+            tokenCostService.reserve(
+                    costContext, messages, List.of(),
+                    chatClient.providerName(), chatClient.modelName(), 1024);
+        }
+        ChatCompletionResponse response;
+        try {
+            response = chatClient.complete(new ChatCompletionRequest(
+                    chatClient.providerName(), null, messages, Map.of("temperature", 0.0)));
+        } catch (RuntimeException exception) {
+            recordFailedCost(runId, "evaluation.generation", startedAt);
+            throw exception;
+        }
+        if (tokenCostService != null) {
+            tokenCostService.record(
+                    costContext,
+                    response.usage(), messages, List.of(),
+                    chatClient.providerName(), chatClient.modelName());
+        }
         return response.content() == null ? "" : response.content().trim();
     }
 
@@ -449,18 +761,42 @@ public class EvaluationService {
      * @return 打分结果（faithfulness 和 answerCorrectness）
      */
     private JudgeScores judge(
-            String question, String expectedAnswer, String answer, List<RetrievalResult> retrieved) {
+            long runId,
+            String question,
+            String expectedAnswer,
+            String answer,
+            List<RetrievalResult> retrieved) {
         String reference = expectedAnswer == null || expectedAnswer.isBlank() ? "（无参考答案）" : expectedAnswer;
         String prompt = "问题：" + question
                 + "\n参考答案：" + reference
                 + "\n模型答案：" + answer
                 + "\n资料：\n" + context(retrieved);
 
-        ChatCompletionResponse response = chatClient.complete(new ChatCompletionRequest(
-                chatClient.providerName(), null, List.of(
+        java.time.Instant startedAt = java.time.Instant.now();
+        List<ChatMessage> messages = List.of(
                 new ChatMessage("system", JUDGE_SYSTEM),
-                new ChatMessage("user", prompt)),
-                Map.of("temperature", 0.0)));
+                new ChatMessage("user", prompt));
+        var costContext = costContext(runId, "evaluation.judge", startedAt);
+        if (tokenCostService != null) {
+            tokenCostService.reserve(
+                    costContext, messages, List.of(),
+                    chatClient.providerName(), chatClient.modelName(), 512);
+        }
+        ChatCompletionResponse response;
+        try {
+            response = chatClient.complete(new ChatCompletionRequest(
+                    chatClient.providerName(), null, messages,
+                    Map.of("temperature", 0.0)));
+        } catch (RuntimeException exception) {
+            recordFailedCost(runId, "evaluation.judge", startedAt);
+            throw exception;
+        }
+        if (tokenCostService != null) {
+            tokenCostService.record(
+                    costContext,
+                    response.usage(), messages,
+                    List.of(), chatClient.providerName(), chatClient.modelName());
+        }
 
         String raw = response.content() == null ? "{}" : response.content().trim();
         try {
@@ -471,6 +807,22 @@ public class EvaluationService {
         } catch (Exception e) {
             throw new IllegalStateException("评测裁判返回非法 JSON: " + raw, e);
         }
+    }
+
+    private void recordFailedCost(long runId, String function, java.time.Instant startedAt) {
+        if (tokenCostService != null) {
+            tokenCostService.recordFailure(
+                    costContext(runId, function, startedAt),
+                    chatClient.providerName(), chatClient.modelName(), "FAILED");
+        }
+    }
+
+    private com.rag2agent.bootstrap.service.TokenCostService.CostContext costContext(
+            long runId, String function, java.time.Instant startedAt) {
+        return new com.rag2agent.bootstrap.service.TokenCostService.CostContext(
+                java.util.UUID.randomUUID().toString(), null, runId, null,
+                com.rag2agent.bootstrap.tenancy.TenantContext.getTenantId(),
+                function, startedAt);
     }
 
     /**

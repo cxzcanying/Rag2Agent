@@ -1,8 +1,8 @@
 spring:
   datasource:
     url: jdbc:postgresql://localhost:15432/rag2agent
-    username: ${POSTGRES_USER:rag2agent}
-    password: ${POSTGRES_PASSWORD:rag2agent}
+    username: ${POSTGRES_APP_USER:rag2agent_app}
+    password: ${POSTGRES_APP_PASSWORD:rag2agent}
     driver-class-name: org.postgresql.Driver
   data:
     redis:
@@ -17,7 +17,7 @@ rag2agent:
       port: 5432
       database: rag2agent
     minio:
-      endpoint: http://localhost:9000 #客户端访问 MinIO 服务的地址，9000程序端口，9001Web端口
+      endpoint: ${MINIO_ENDPOINT:http://localhost:19000} # 宿主高位端口，容器内仍为 9000
       access-key: ${MINIO_ROOT_USER:rag2agent}
       secret-key: ${MINIO_ROOT_PASSWORD:rag2agent-password}
       bucket: rag2agent-documents

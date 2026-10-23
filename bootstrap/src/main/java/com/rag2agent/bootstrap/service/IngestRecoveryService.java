@@ -2,6 +2,7 @@ package com.rag2agent.bootstrap.service;
 
 import com.rag2agent.bootstrap.config.RecoveryProperties;
 import com.rag2agent.bootstrap.entity.IngestTask;
+import com.rag2agent.bootstrap.tenancy.TenantContext;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import java.util.List;
@@ -51,7 +52,9 @@ public class IngestRecoveryService {
     void recoverOnStartup() {
         // 放后台线程执行，避免同步 pipeline 阻塞上下文初始化；daemon 不阻止 JVM 退出。
         Thread startup = new Thread(
-                () -> recover(ingestTaskService.listInterrupted()), "ingest-recovery-startup");
+                () -> TenantContext.runAsSystem(
+                        () -> recover(ingestTaskService.listInterrupted())),
+                "ingest-recovery-startup");
         startup.setDaemon(true);
         startup.start();
     }
@@ -62,7 +65,8 @@ public class IngestRecoveryService {
         if (!recoveryProperties.isEnabled()) {
             return;
         }
-        recover(ingestTaskService.listInterruptedStale(recoveryProperties.getIngestStaleSeconds()));
+        TenantContext.runAsSystem(() -> recover(
+                ingestTaskService.listInterruptedStale(recoveryProperties.getIngestStaleSeconds())));
     }
 
     private void recover(List<IngestTask> tasks) {
@@ -83,7 +87,8 @@ public class IngestRecoveryService {
             return;
         }
         try {
-            ingestMessageService.sendIngestTask(task.getDocumentId(), task.getId());
+            ingestMessageService.sendIngestTask(
+                    task.getDocumentId(), task.getId(), task.getTenantId());
             metric("recovered");
             log.info("入库中断任务已重新驱动: taskId={}, documentId={}", task.getId(), task.getDocumentId());
         } catch (RuntimeException exception) {

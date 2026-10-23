@@ -22,9 +22,10 @@ import org.springframework.boot.test.web.server.LocalServerPort;
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
             "rag2agent.mcp.server.enabled=true",
-            "rag2agent.mcp.server.token=test-token",
             "rag2agent.mcp.server.required-scopes=mcp:read",
-            "rag2agent.mcp.server.token-scopes=mcp:read"
+            "rag2agent.mcp.server.clients[0].name=integration-test",
+            "rag2agent.mcp.server.clients[0].token=test-token",
+            "rag2agent.mcp.server.clients[0].scopes[0]=mcp:read"
         })
 class McpServerIntegrationTest {
 
@@ -34,8 +35,7 @@ class McpServerIntegrationTest {
     @Test
     void officialClientNegotiatesAndCallsTool() {
         HttpRequest.Builder headers = HttpRequest.newBuilder()
-                .header("Authorization", "Bearer test-token")
-                .header("X-MCP-Scopes", "mcp:read");
+                .header("Authorization", "Bearer test-token");
         HttpClientStreamableHttpTransport transport =
                 HttpClientStreamableHttpTransport.builder("http://localhost:" + port)
                         .requestBuilder(headers)
@@ -63,7 +63,7 @@ class McpServerIntegrationTest {
     }
 
     @Test
-    void missingBearerAndInsufficientScopeAreRejected() throws Exception {
+    void missingOrInvalidBearerIsRejected() throws Exception {
         HttpClient http = HttpClient.newHttpClient();
         HttpRequest missingToken = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/mcp"))
                 .header("Content-Type", "application/json")
@@ -73,14 +73,13 @@ class McpServerIntegrationTest {
         HttpResponse<String> unauthorized = http.send(missingToken, HttpResponse.BodyHandlers.ofString());
         assertEquals(401, unauthorized.statusCode());
 
-        HttpRequest insufficientScope = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/mcp"))
+        HttpRequest invalidToken = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/mcp"))
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json, text/event-stream")
-                .header("Authorization", "Bearer test-token")
-                .header("X-MCP-Scopes", "other:read")
+                .header("Authorization", "Bearer wrong-token")
                 .POST(HttpRequest.BodyPublishers.ofString("{}"))
                 .build();
-        HttpResponse<String> forbidden = http.send(insufficientScope, HttpResponse.BodyHandlers.ofString());
-        assertEquals(403, forbidden.statusCode());
+        HttpResponse<String> rejected = http.send(invalidToken, HttpResponse.BodyHandlers.ofString());
+        assertEquals(401, rejected.statusCode());
     }
 }

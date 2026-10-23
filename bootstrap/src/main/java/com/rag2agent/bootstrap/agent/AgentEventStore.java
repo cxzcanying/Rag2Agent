@@ -56,6 +56,24 @@ public class AgentEventStore {
                 """, runId, sessionId, eventSeq, json(state));
     }
 
+    public void saveSummary(
+            Long userId,
+            String sessionId,
+            long sourceFromSeq,
+            long sourceToSeq,
+            String version,
+            String summary,
+            String requestId) {
+        jdbc.update("""
+                INSERT INTO agent_session_summary
+                    (user_id, tenant_id, session_id, source_from_seq, source_to_seq,
+                     version, summary, request_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, userId,
+                com.rag2agent.bootstrap.tenancy.TenantContext.requireTenantId(),
+                sessionId, sourceFromSeq, sourceToSeq, version, summary, requestId);
+    }
+
     public List<EventRecord> listEvents(
             Long userId, String sessionId, long afterSeq, int limit) {
         return jdbc.query("""
@@ -74,6 +92,39 @@ public class AgentEventStore {
                 userId, sessionId, afterSeq, limit);
     }
 
+    public List<SessionTurn> recentTurns(Long userId, String sessionId, int limit) {
+        return jdbc.query("""
+                SELECT query, answer
+                FROM agent_run
+                WHERE user_id = ? AND session_id = ?
+                  AND answer IS NOT NULL
+                  AND status IN ('COMPLETED', 'DEGRADED', 'MAX_STEPS_REACHED')
+                ORDER BY created_at DESC
+                LIMIT ?
+                """, (rs, rowNum) -> new SessionTurn(rs.getString("query"), rs.getString("answer")),
+                userId, sessionId, Math.min(Math.max(limit, 1), 12))
+                .reversed();
+    }
+
+    public SessionSummary latestSummary(Long userId, String sessionId) {
+        List<SessionSummary> summaries = jdbc.query("""
+                SELECT source_from_seq, source_to_seq, version, summary, request_id
+                FROM agent_session_summary
+                WHERE user_id = ? AND tenant_id = ? AND session_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """, (rs, rowNum) -> new SessionSummary(
+                        rs.getLong("source_from_seq"),
+                        rs.getLong("source_to_seq"),
+                        rs.getString("version"),
+                        rs.getString("summary"),
+                        rs.getString("request_id")),
+                userId,
+                com.rag2agent.bootstrap.tenancy.TenantContext.requireTenantId(),
+                sessionId);
+        return summaries.isEmpty() ? null : summaries.getFirst();
+    }
+
     private String json(Object value) {
         try {
             return objectMapper.writeValueAsString(value == null ? Map.of() : value);
@@ -89,4 +140,13 @@ public class AgentEventStore {
             String type,
             String payload,
             java.time.Instant createdAt) {}
+
+    public record SessionTurn(String query, String answer) {}
+
+    public record SessionSummary(
+            long sourceFromSeq,
+            long sourceToSeq,
+            String version,
+            String summary,
+            String requestId) {}
 }

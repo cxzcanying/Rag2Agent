@@ -75,7 +75,8 @@ public class ContextCompactor {
 
         // 2. 如果未超预算，直接返回原始消息（不压缩）
         if (before <= tokenBudget) {
-            return new CompactionResult(List.copyOf(messages), before, before, 0, false);
+            return new CompactionResult(
+                    List.copyOf(messages), before, before, 0, false, 0, 0, "", "");
         }
 
         // ===== 开始压缩 =====
@@ -136,10 +137,10 @@ public class ContextCompactor {
 
         // 3d. 对丢弃的消息（索引 0 到 tailStart-1）生成摘要
         List<ChatMessage> dropped = messages.subList(0, tailStart);
-        String summary = summarize(dropped);
+        String summary = structuredSummary(dropped);
         if (!summary.isBlank()) {
             // 将摘要作为一条 user 消息插入，前缀标记让模型知道这是压缩摘要
-            preserved.add(new ChatMessage("user", SUMMARY_PREFIX + summary));
+            preserved.add(new ChatMessage("system", SUMMARY_PREFIX + summary));
         }
 
         // 3e. 追加保留的尾部消息
@@ -155,7 +156,8 @@ public class ContextCompactor {
                 .count();
 
         return new CompactionResult(
-                compacted, before, after, messages.size() - retainedOriginalMessages, true);
+                compacted, before, after, messages.size() - retainedOriginalMessages, true,
+                0, dropped.size(), "v1", summary);
     }
 
     // ==================== Token 估算 ====================
@@ -168,6 +170,65 @@ public class ContextCompactor {
      */
     public int estimateTokens(List<ChatMessage> messages) {
         return messages.stream().mapToInt(this::estimateTokens).sum();
+    }
+
+    public int estimateText(String text) {
+        return text == null || text.isBlank() ? 0 : 4 + Math.max(1, (text.length() + 1) / 2);
+    }
+
+    private String structuredSummary(List<ChatMessage> dropped) {
+        List<String> requirements = new ArrayList<>();
+        List<String> completed = new ArrayList<>();
+        List<String> evidence = new ArrayList<>();
+        List<String> decisions = new ArrayList<>();
+        List<String> open = new ArrayList<>();
+        List<String> toolResults = new ArrayList<>();
+        String goal = "";
+        for (ChatMessage message : dropped) {
+            String content = message.content();
+            if (content == null || content.isBlank()) {
+                continue;
+            }
+            String line = message.role() + ": " + content.replaceAll("\\s+", " ").trim();
+            if (goal.isBlank() && "user".equals(message.role())) {
+                goal = line;
+            } else if ("tool".equals(message.role())) {
+                toolResults.add(line);
+            } else if (content.contains("要求") || content.contains("必须") || "user".equals(message.role())) {
+                requirements.add(line);
+            } else if (content.contains("决定") || content.contains("结论")) {
+                decisions.add(line);
+            } else if (content.contains("建议") || content.contains("引用") || content.contains("证据")) {
+                evidence.add(line);
+            } else if (content.contains("TODO") || content.contains("待") || content.contains("未")) {
+                open.add(line);
+            } else {
+                completed.add(line);
+            }
+        }
+        StringBuilder result = new StringBuilder();
+        appendSection(result, "当前目标", List.of(goal));
+        appendSection(result, "用户明确要求", requirements);
+        appendSection(result, "已完成事项", completed);
+        appendSection(result, "关键证据", evidence);
+        appendSection(result, "已作决定", decisions);
+        appendSection(result, "未解决问题", open);
+        appendSection(result, "有效工具结果", toolResults);
+        String value = result.toString().trim();
+        return value.length() <= summaryMaxChars
+                ? value
+                : value.substring(0, summaryMaxChars);
+    }
+
+    private void appendSection(StringBuilder target, String title, List<String> lines) {
+        List<String> present = lines.stream().filter(line -> line != null && !line.isBlank()).toList();
+        if (present.isEmpty()) {
+            return;
+        }
+        target.append(title).append(":\n");
+        for (String line : present.stream().limit(4).toList()) {
+            target.append("- ").append(line).append('\n');
+        }
     }
 
     /**
@@ -349,5 +410,9 @@ public class ContextCompactor {
             int estimatedTokensBefore,
             int estimatedTokensAfter,
             int droppedMessages,
-            boolean compacted) {}
+            boolean compacted,
+            int sourceFromSeq,
+            int sourceToSeq,
+            String summaryVersion,
+            String summary) {}
 }

@@ -1,5 +1,11 @@
 server:
   port: 18080
+  tomcat:
+    max-connections: ${SERVER_MAX_CONNECTIONS:10000}
+    accept-count: ${SERVER_ACCEPT_COUNT:1000}
+    connection-timeout: ${SERVER_CONNECTION_TIMEOUT:10s}
+    threads:
+      max: ${SERVER_THREADS_MAX:200}
 
 spring:
   application:
@@ -10,6 +16,9 @@ spring:
     scheduling:
       pool:
         size: 2
+  threads:
+    virtual:
+      enabled: ${SPRING_VIRTUAL_THREADS:true}
   servlet:
     multipart:
       max-file-size: 50MB
@@ -17,6 +26,17 @@ spring:
   data:
     redis:
       port: 16379
+      timeout: ${RAG2AGENT_REDIS_TIMEOUT:2s}
+      connect-timeout: ${RAG2AGENT_REDIS_CONNECT_TIMEOUT:2s}
+  datasource:
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:30}
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
+      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:3000}
+      idle-timeout: ${DB_IDLE_TIMEOUT_MS:600000}
+      max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
+      connection-init-sql: "SET statement_timeout = '${DB_STATEMENT_TIMEOUT_MS:30000}ms'"
 
 springdoc:
   api-docs:
@@ -31,7 +51,7 @@ management:
         include: health,info,metrics,prometheus
   endpoint:
     health:
-      show-details: always
+      show-details: never
   metrics:
     tags:
       application: ${spring.application.name}
@@ -66,6 +86,21 @@ sa-token:
   is-log: false
 
 rag2agent:
+  langfuse:
+    enabled: ${LANGFUSE_ENABLED:false}
+    base-url: ${LANGFUSE_BASE_URL:http://localhost:3000}
+    public-key: ${LANGFUSE_PUBLIC_KEY:}
+    secret-key: ${LANGFUSE_SECRET_KEY:}
+    dataset-name: ${LANGFUSE_DATASET_NAME:}
+    dataset-version: ${LANGFUSE_DATASET_VERSION:}
+  registration:
+    mode: ${RAG2AGENT_REGISTRATION_MODE:DISABLED}
+    invite-code: ${RAG2AGENT_REGISTRATION_INVITE_CODE:}
+    tenant-id: ${RAG2AGENT_REGISTRATION_TENANT_ID:1}
+    organization-id: ${RAG2AGENT_REGISTRATION_ORGANIZATION_ID:1}
+  security:
+    admin-usernames: ${RAG2AGENT_ADMIN_USERNAMES:}
+    internal-cidrs: ${RAG2AGENT_INTERNAL_CIDRS:127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
   tenancy:
     default-tenant-id: ${RAG2AGENT_DEFAULT_TENANT_ID:1}
     default-organization-id: ${RAG2AGENT_DEFAULT_ORGANIZATION_ID:1}
@@ -75,6 +110,41 @@ rag2agent:
     ingest-stale-seconds: ${RAG2AGENT_RECOVERY_INGEST_STALE_SECONDS:1800}
   ingest:
     rocketmq-enabled: ${RAG2AGENT_MQ_ENABLED:false}
+    local-fallback-enabled: ${RAG2AGENT_INGEST_LOCAL_FALLBACK_ENABLED:true}
+    max-concurrent-documents: ${RAG2AGENT_INGEST_MAX_CONCURRENT_DOCUMENTS:2}
+  concurrency:
+    evaluation:
+      core-size: ${RAG2AGENT_EVALUATION_CORE_THREADS:1}
+      max-size: ${RAG2AGENT_EVALUATION_MAX_THREADS:1}
+      queue-capacity: ${RAG2AGENT_EVALUATION_QUEUE_CAPACITY:100}
+    retrieval:
+      core-size: ${RAG2AGENT_RETRIEVAL_CORE_THREADS:4}
+      max-size: ${RAG2AGENT_RETRIEVAL_MAX_THREADS:4}
+      queue-capacity: ${RAG2AGENT_RETRIEVAL_QUEUE_CAPACITY:32}
+    tool:
+      core-size: ${RAG2AGENT_TOOL_CORE_THREADS:4}
+      max-size: ${RAG2AGENT_TOOL_MAX_THREADS:4}
+      queue-capacity: ${RAG2AGENT_TOOL_QUEUE_CAPACITY:32}
+    agent-team:
+      core-size: ${RAG2AGENT_TEAM_CORE_THREADS:2}
+      max-size: ${RAG2AGENT_TEAM_MAX_THREADS:2}
+      queue-capacity: ${RAG2AGENT_TEAM_QUEUE_CAPACITY:32}
+    agent-worker:
+      core-size: ${RAG2AGENT_WORKER_CORE_THREADS:2}
+      max-size: ${RAG2AGENT_WORKER_MAX_THREADS:4}
+      queue-capacity: ${RAG2AGENT_WORKER_QUEUE_CAPACITY:32}
+    memory:
+      core-size: ${RAG2AGENT_MEMORY_CORE_THREADS:1}
+      max-size: ${RAG2AGENT_MEMORY_MAX_THREADS:2}
+      queue-capacity: ${RAG2AGENT_MEMORY_QUEUE_CAPACITY:32}
+    ingest:
+      core-size: ${RAG2AGENT_INGEST_CORE_THREADS:2}
+      max-size: ${RAG2AGENT_INGEST_MAX_THREADS:2}
+      queue-capacity: ${RAG2AGENT_INGEST_QUEUE_CAPACITY:32}
+    docling:
+      core-size: ${RAG2AGENT_DOCLING_CORE_THREADS:1}
+      max-size: ${RAG2AGENT_DOCLING_MAX_THREADS:2}
+      queue-capacity: ${RAG2AGENT_DOCLING_QUEUE_CAPACITY:16}
   search:
     parallel-timeout-millis: ${RAG2AGENT_SEARCH_PARALLEL_TIMEOUT_MILLIS:10000}
     chinese-search-mode: ${RAG2AGENT_CHINESE_SEARCH_MODE:auto}
@@ -98,6 +168,12 @@ rag2agent:
     enabled: ${RAG2AGENT_RATE_LIMIT_ENABLED:true}
     limit: ${RAG2AGENT_RATE_LIMIT:60}
     window-seconds: ${RAG2AGENT_RATE_LIMIT_WINDOW_SECONDS:60}
+    fallback-limit: ${RAG2AGENT_RATE_LIMIT_FALLBACK_LIMIT:5}
+    fallback-window-seconds: ${RAG2AGENT_RATE_LIMIT_FALLBACK_WINDOW_SECONDS:60}
+    tenant-limit: ${RAG2AGENT_RATE_LIMIT_TENANT:600}
+    global-limit: ${RAG2AGENT_RATE_LIMIT_GLOBAL:6000}
+    tenant-fallback-limit: ${RAG2AGENT_RATE_LIMIT_TENANT_FALLBACK:30}
+    global-fallback-limit: ${RAG2AGENT_RATE_LIMIT_GLOBAL_FALLBACK:300}
     login-failure-limit: ${RAG2AGENT_LOGIN_FAILURE_LIMIT:5}
     login-failure-window-seconds: ${RAG2AGENT_LOGIN_FAILURE_WINDOW_SECONDS:900}
     login-lock-seconds: ${RAG2AGENT_LOGIN_LOCK_SECONDS:900}
@@ -114,6 +190,11 @@ rag2agent:
     team-worker-token-budget: ${RAG2AGENT_TEAM_WORKER_TOKEN_BUDGET:12000}
     team-worker-tool-budget: ${RAG2AGENT_TEAM_WORKER_TOOL_BUDGET:2}
     team-worker-timeout-millis: ${RAG2AGENT_TEAM_WORKER_TIMEOUT_MILLIS:60000}
+  memory:
+    extraction:
+      enabled: ${RAG2AGENT_MEMORY_EXTRACTION_ENABLED:false}
+      max-facts: ${RAG2AGENT_MEMORY_EXTRACTION_MAX_FACTS:5}
+      min-confidence: ${RAG2AGENT_MEMORY_EXTRACTION_MIN_CONFIDENCE:0.7}
   application:
     name: RAG2Agent
     version: 0.1.0-SNAPSHOT
@@ -128,7 +209,6 @@ rag2agent:
       enabled: ${RAG2AGENT_MCP_REMOTE_ENABLED:false}
       endpoint: ${RAG2AGENT_MCP_REMOTE_ENDPOINT:http://localhost:19090/mcp}
       token: ${RAG2AGENT_MCP_REMOTE_TOKEN:dev-mcp-token}
-      scopes: ${RAG2AGENT_MCP_REMOTE_SCOPES:mcp:read}
   ai:
     docling:
       enabled: ${RAG2AGENT_DOCLING_ENABLED:false}
@@ -143,19 +223,21 @@ rag2agent:
         - ${RAG2AGENT_DOCLING_OCR_LANGUAGE_1:ch}
         - ${RAG2AGENT_DOCLING_OCR_LANGUAGE_2:en}
     cost:
+      daily-budget-usd: ${RAG2AGENT_AI_DAILY_BUDGET_USD:0}
       prices:
         "[deepseek/deepseek-v4-flash]":
-          version: ${DEEPSEEK_FLASH_PRICE_VERSION:deepseek-official-2026-09-01-usd}
+          version: ${DEEPSEEK_FLASH_PRICE_VERSION:deepseek-official-2026-10-23-usd}
           currency: ${DEEPSEEK_PRICE_CURRENCY:USD}
-          prompt-per-million: ${DEEPSEEK_FLASH_PROMPT_PRICE:0.22}
-          completion-per-million: ${DEEPSEEK_FLASH_COMPLETION_PRICE:0.66}
-          cache-read-per-million: ${DEEPSEEK_FLASH_CACHE_READ_PRICE:0.007}
+          prompt-per-million: ${DEEPSEEK_FLASH_PROMPT_PRICE:0.15}
+          completion-per-million: ${DEEPSEEK_FLASH_COMPLETION_PRICE:0.60}
+          cache-read-per-million: ${DEEPSEEK_FLASH_CACHE_READ_PRICE:0.003}
           cache-write-per-million: ${DEEPSEEK_FLASH_CACHE_WRITE_PRICE:0}
           peak-multiplier: ${DEEPSEEK_PEAK_PRICE_MULTIPLIER:2}
           peak-windows-utc: "${DEEPSEEK_PEAK_WINDOWS_UTC:01:00-04:00,06:00-10:00}"
           peak-weekdays-only: true
+          off-peak-dates: ${DEEPSEEK_OFF_PEAK_DATES:}
         "[deepseek/deepseek-v4-pro]":
-          version: ${DEEPSEEK_PRO_PRICE_VERSION:deepseek-official-2026-09-01-usd}
+          version: ${DEEPSEEK_PRO_PRICE_VERSION:deepseek-official-2026-10-23-usd}
           currency: ${DEEPSEEK_PRICE_CURRENCY:USD}
           prompt-per-million: ${DEEPSEEK_PRO_PROMPT_PRICE:0.66}
           completion-per-million: ${DEEPSEEK_PRO_COMPLETION_PRICE:1.98}
@@ -164,6 +246,7 @@ rag2agent:
           peak-multiplier: ${DEEPSEEK_PEAK_PRICE_MULTIPLIER:2}
           peak-windows-utc: "${DEEPSEEK_PEAK_WINDOWS_UTC:01:00-04:00,06:00-10:00}"
           peak-weekdays-only: true
+          off-peak-dates: ${DEEPSEEK_OFF_PEAK_DATES:}
         "[siliconflow/BAAI/bge-m3]":
           version: ${SILICONFLOW_BGE_M3_PRICE_VERSION:siliconflow-official-2026-09-01-free}
           currency: ${SILICONFLOW_PRICE_CURRENCY:USD}
@@ -191,6 +274,7 @@ rag2agent:
       failure-threshold: ${RAG2AGENT_AI_FAILURE_THRESHOLD:5}
       open-state-millis: ${RAG2AGENT_AI_OPEN_STATE_MILLIS:30000}
       max-concurrent-requests: ${RAG2AGENT_AI_MAX_CONCURRENT_REQUESTS:16}
+      queue-timeout-millis: ${RAG2AGENT_AI_QUEUE_TIMEOUT_MILLIS:2000}
     providers:
       - name: deepseek
         base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}

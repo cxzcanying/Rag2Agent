@@ -51,6 +51,15 @@ public class EvaluationController {
         return ApiResponse.success(evaluationService.importCases(request.kbId(), request.cases()));
     }
 
+    @PostMapping("/langfuse/import")
+    public ApiResponse<Integer> importLangfuse(
+            @RequestParam Long kbId,
+            @RequestParam(required = false) String datasetName) {
+        knowledgeBaseService.requireWritable(StpUtil.getLoginIdAsLong(), kbId);
+        return ApiResponse.success(
+                evaluationService.importLangfuseCases(kbId, datasetName));
+    }
+
 
     /**
      * 提交单个评测任务

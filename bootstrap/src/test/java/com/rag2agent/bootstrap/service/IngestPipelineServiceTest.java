@@ -50,10 +50,10 @@ class IngestPipelineServiceTest {
             source.add(new TextChunk("id" + i, "1", "chunk-" + i, i, java.util.Map.of()));
         }
         Method persist = IngestPipelineService.class.getDeclaredMethod(
-                "persistChunks", DocumentMeta.class, List.class, int.class);
+                "persistChunks", DocumentMeta.class, Long.class, List.class, int.class);
         persist.setAccessible(true);
 
-        assertThrows(Exception.class, () -> persist.invoke(service, document, source, 1));
+        assertThrows(Exception.class, () -> persist.invoke(service, document, 1L, source, 1));
         org.mockito.Mockito.verify(chunks, org.mockito.Mockito.times(1)).insertChunks(any());
     }
 

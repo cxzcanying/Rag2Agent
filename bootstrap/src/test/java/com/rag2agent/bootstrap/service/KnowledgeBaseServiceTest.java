@@ -3,7 +3,9 @@ package com.rag2agent.bootstrap.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -24,10 +26,11 @@ class KnowledgeBaseServiceTest {
     void createBindsKnowledgeBaseToCurrentTenantAndOrganization() {
         KnowledgeBaseMapper bases = mock(KnowledgeBaseMapper.class);
         AppUserMapper users = mock(AppUserMapper.class);
+        SecurityAuditService audit = mock(SecurityAuditService.class);
         AppUser user = user(7L, 11L, 12L);
         when(users.selectById(7L)).thenReturn(user);
         KnowledgeBaseService service =
-                new KnowledgeBaseService(bases, users, mock(JdbcTemplate.class));
+                new KnowledgeBaseService(bases, users, mock(JdbcTemplate.class), audit);
 
         var view = service.create(
                 7L, new CreateKnowledgeBaseRequest("财务", "季度数据", "tenant"));
@@ -38,6 +41,8 @@ class KnowledgeBaseServiceTest {
         assertEquals(12L, created.getValue().getOrgId());
         assertEquals("TENANT", view.visibility());
         assertEquals("OWNER", view.accessRole());
+        verify(audit).allow(
+                eq(11L), eq(7L), eq("KB_CREATE"), eq("KNOWLEDGE_BASE"), any(), any());
     }
 
     @Test
@@ -48,7 +53,8 @@ class KnowledgeBaseServiceTest {
         when(bases.countReadable(3L, 7L, 11L, 12L)).thenReturn(1);
         when(bases.countWritable(3L, 7L, 11L)).thenReturn(0);
         KnowledgeBaseService service =
-                new KnowledgeBaseService(bases, users, mock(JdbcTemplate.class));
+                new KnowledgeBaseService(
+                        bases, users, mock(JdbcTemplate.class), mock(SecurityAuditService.class));
 
         service.requireReadable(7L, 3L);
         BusinessException denied =
@@ -65,10 +71,44 @@ class KnowledgeBaseServiceTest {
         when(users.selectById(7L)).thenReturn(user(7L, 11L, 12L));
         when(users.selectById(8L)).thenReturn(user(8L, 21L, 22L));
         when(bases.countAdmin(3L, 7L, 11L)).thenReturn(1);
-        KnowledgeBaseService service = new KnowledgeBaseService(bases, users, jdbc);
+        KnowledgeBaseService service = new KnowledgeBaseService(
+                bases, users, jdbc, mock(SecurityAuditService.class));
 
         assertThrows(
                 BusinessException.class, () -> service.grant(7L, 3L, 8L, null, "VIEWER"));
+    }
+
+    @Test
+    void adminCannotChangeVisibility() {
+        KnowledgeBaseMapper bases = mock(KnowledgeBaseMapper.class);
+        AppUserMapper users = mock(AppUserMapper.class);
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        when(users.selectById(7L)).thenReturn(user(7L, 11L, 12L));
+        when(bases.countOwner(3L, 7L, 11L)).thenReturn(0);
+        KnowledgeBaseService service = new KnowledgeBaseService(
+                bases, users, jdbc, mock(SecurityAuditService.class));
+
+        assertThrows(BusinessException.class,
+                () -> service.updateVisibility(7L, 3L, "TENANT"));
+        verify(jdbc, never()).update(any(String.class), any(Object[].class));
+    }
+
+    @Test
+    void adminCannotAppointAnotherAdmin() {
+        KnowledgeBaseMapper bases = mock(KnowledgeBaseMapper.class);
+        AppUserMapper users = mock(AppUserMapper.class);
+        when(users.selectById(7L)).thenReturn(user(7L, 11L, 12L));
+        when(users.selectById(8L)).thenReturn(user(8L, 11L, 12L));
+        when(bases.countAdmin(3L, 7L, 11L)).thenReturn(1);
+        when(bases.countOwner(3L, 7L, 11L)).thenReturn(0);
+        KnowledgeBaseService service = new KnowledgeBaseService(
+                bases, users, mock(JdbcTemplate.class), mock(SecurityAuditService.class));
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> service.grant(7L, 3L, 8L, null, "ADMIN"));
+
+        assertEquals(ErrorCode.FORBIDDEN, exception.errorCode());
     }
 
     private static AppUser user(long id, long tenantId, long orgId) {

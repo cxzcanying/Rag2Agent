@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Collection;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
@@ -59,21 +60,42 @@ public class ToolExecutor {
     }
 
     public String execute(Long runId, Long userId, String toolName, Map<String, Object> arguments) {
+        return execute(runId, userId, toolName, arguments, null);
+    }
+
+    public String execute(
+            Long runId,
+            Long userId,
+            String toolName,
+            Map<String, Object> arguments,
+            Collection<String> allowedTools) {
         ToolCallRecord record = new ToolCallRecord();
         record.setRunId(runId);
         record.setToolName(toolName);
         record.setInput(toJson(redact(arguments)));
         record.setStatus("EXECUTING");
         toolCallMapper.insert(record);
-        return execute(record, userId, arguments);
+        return execute(record, userId, arguments, allowedTools);
     }
 
     public String execute(ToolCallRecord record, Long userId, Map<String, Object> arguments) {
+        return execute(record, userId, arguments, null);
+    }
+
+    private String execute(
+            ToolCallRecord record,
+            Long userId,
+            Map<String, Object> arguments,
+            Collection<String> allowedTools) {
         String toolName = record.getToolName();
         Timer.Sample sample = Timer.start(meterRegistry);
         String outcome = "success";
         Future<String> future = null;
         try {
+            if (!toolRegistry.isAllowed(toolName, allowedTools)) {
+                throw new BusinessException(
+                        ErrorCode.FORBIDDEN, "工具不在当前 Worker 白名单: " + toolName);
+            }
             Tool tool = toolRegistry.get(toolName);
             if (tool == null) {
                 throw new BusinessException(ErrorCode.BAD_REQUEST, "未知工具: " + toolName);

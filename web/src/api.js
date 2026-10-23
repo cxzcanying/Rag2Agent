@@ -20,6 +20,7 @@ async function request(path, options = {}) {
 }
 
 export const auth = {
+  registrationOptions: () => request('/auth/registration-options'),
   register: (body) => request('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
   login: (body) => request('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
   me: () => request('/auth/me')
@@ -81,7 +82,20 @@ export const agent = {
   getRun: (runId) => request('/agent/runs/' + runId),
   cancel: (runId) => request('/agent/runs/' + runId + '/cancel', { method: 'POST' }),
   approve: (runId, approved) =>
-    request('/agent/approvals/' + runId, { method: 'POST', body: JSON.stringify({ approved }) })
+    request('/agent/approvals/' + runId, { method: 'POST', body: JSON.stringify({ approved }) }),
+  memories: (kbId, limit = 50) => request(
+    '/agent/memories?limit=' + limit + (kbId ? '&kbId=' + kbId : '')
+  ),
+  searchMemories: (query, kbId, topK = 5) => request(
+    '/agent/memories/search?query=' + encodeURIComponent(query)
+      + (kbId ? '&kbId=' + kbId : '') + '&topK=' + topK
+  ),
+  reviewMemories: (limit = 50) => request('/agent/memories/review?limit=' + limit),
+  reviewMemory: (memoryId, approved) => request(
+    '/agent/memories/review/' + memoryId,
+    { method: 'POST', body: JSON.stringify({ approved }) }
+  ),
+  deleteMemory: (memoryId) => request('/agent/memories/' + memoryId, { method: 'DELETE' })
 }
 
 async function readSse(resp, onEvent) {
@@ -133,4 +147,8 @@ export const evaluations = {
   results: (runId) => request('/evaluations/runs/' + runId + '/results'),
   cancel: (runId) => request('/evaluations/runs/' + runId + '/cancel', { method: 'POST' }),
   goldSetCoverage: (kbId) => request('/evaluations/gold-set/coverage?kbId=' + kbId)
+}
+
+export const costs = {
+  summary: (params) => request('/costs/summary?' + params.toString())
 }

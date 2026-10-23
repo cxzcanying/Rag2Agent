@@ -21,6 +21,7 @@ class IngestRecoveryServiceTest {
         IngestTask task = new IngestTask();
         task.setId(11L);
         task.setDocumentId(4L);
+        task.setTenantId(1L);
         task.setStatus("PENDING");
         IngestTaskService tasks = mock(IngestTaskService.class);
         when(tasks.listInterruptedStale(1800)).thenReturn(List.of(task));
@@ -37,7 +38,7 @@ class IngestRecoveryServiceTest {
         verify(tasks).listInterruptedStale(1800);
         verify(redis).hasKey("rag2agent:ingest:lock:4");
         verify(tasks).requeueInterrupted(11L);
-        verify(messages).sendIngestTask(4L, 11L);
+        verify(messages).sendIngestTask(4L, 11L, 1L);
     }
 
     @Test

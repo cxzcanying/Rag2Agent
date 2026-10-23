@@ -18,6 +18,9 @@ import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
+import org.springframework.util.StringUtils;
 
 /** MCP 2.0 Streamable HTTP 服务：官方协议生命周期 + 应用级认证过滤器。 */
 @Configuration
@@ -71,12 +74,36 @@ public class McpServerConfiguration {
 
     @Bean
     public FilterRegistrationBean<McpAuthorizationFilter> mcpAuthorization(
-            McpServerProperties properties) {
+            McpServerProperties properties, Environment environment) {
+        validateCredentials(properties, environment);
         FilterRegistrationBean<McpAuthorizationFilter> registration =
                 new FilterRegistrationBean<>(new McpAuthorizationFilter(properties));
         registration.addUrlPatterns(properties.getEndpoint());
         registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
         return registration;
+    }
+
+    static void validateCredentials(McpServerProperties properties, Environment environment) {
+        if (properties.getClients().isEmpty()) {
+            throw new IllegalStateException("MCP 服务至少需要一个服务端凭据");
+        }
+        boolean production = environment.acceptsProfiles(Profiles.of("prod", "production"));
+        var names = new java.util.HashSet<String>();
+        for (McpServerProperties.Client client : properties.getClients()) {
+            if (client == null || !StringUtils.hasText(client.getName())
+                    || !StringUtils.hasText(client.getToken())) {
+                throw new IllegalStateException("MCP 凭据名和 token 不能为空");
+            }
+            if (!names.add(client.getName())) {
+                throw new IllegalStateException("MCP 凭据名不能重复: " + client.getName());
+            }
+            if (client.getScopes() == null || client.getScopes().isEmpty()) {
+                throw new IllegalStateException("MCP 凭据必须配置至少一个 scope");
+            }
+            if (production && "dev-mcp-token".equals(client.getToken())) {
+                throw new IllegalStateException("正式环境禁止使用默认 MCP token");
+            }
+        }
     }
 
     private McpServerFeatures.SyncToolSpecification echoTool() {

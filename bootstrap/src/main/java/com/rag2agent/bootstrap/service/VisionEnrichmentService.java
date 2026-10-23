@@ -18,9 +18,15 @@ public class VisionEnrichmentService {
     private static final int MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
     private final VisionClient visionClient;
+    private TokenCostService tokenCostService;
 
     public VisionEnrichmentService(VisionClient visionClient) {
         this.visionClient = visionClient;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setTokenCostService(TokenCostService tokenCostService) {
+        this.tokenCostService = tokenCostService;
     }
 
     public StructuredDocument enrich(StructuredDocument document) {
@@ -35,14 +41,21 @@ public class VisionEnrichmentService {
                 enriched.add(asset);
                 continue;
             }
-            try {
-                VisionResult result = visionClient.describe(new VisionRequest(
-                        """
+            String prompt = """
                         描述这张企业文档图片中可检索的信息：文字、图表标题、坐标、趋势、关键数值和结构。
                         不推断无法从图片确认的事实。只输出简洁事实描述。
-                        """,
+                        """;
+            java.time.Instant startedAt = java.time.Instant.now();
+            var context = TokenCostService.CostContext.current(
+                    "vision.document_enrichment", startedAt);
+            try {
+                VisionResult result = visionClient.describe(new VisionRequest(
+                        prompt,
                         asset.binary(),
                         asset.contentType()));
+                if (tokenCostService != null) {
+                    tokenCostService.recordVision(context, prompt, result);
+                }
                 enriched.add(new Asset(
                         asset.id(),
                         asset.type(),
@@ -54,6 +67,11 @@ public class VisionEnrichmentService {
                         asset.page(),
                         asset.boundingBox()));
             } catch (RuntimeException exception) {
+                if (tokenCostService != null) {
+                    tokenCostService.recordFailure(
+                            context,
+                            visionClient.providerName(), visionClient.modelName(), "FAILED");
+                }
                 log.warn("图片语义生成失败，保留原始资产: assetId={}, reason={}",
                         asset.id(), exception.getMessage());
                 enriched.add(asset);

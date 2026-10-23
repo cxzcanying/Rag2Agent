@@ -50,12 +50,12 @@ public class DoclingClient implements DocumentIntelligenceClient {
                 .addFormDataPart("files", fileName, okhttp3.RequestBody.create(file.toFile(), fileType))
                 .addFormDataPart("to_formats", "json")
                 .addFormDataPart("to_formats", "md")
-                .addFormDataPart("do_ocr", "true")
+                .addFormDataPart("do_ocr", needsOcr(contentType) ? "true" : "false")
                 .addFormDataPart("force_ocr", "false")
                 .addFormDataPart("ocr_preset", properties.getOcrPreset())
                 .addFormDataPart("table_mode", properties.getTableMode())
                 .addFormDataPart("do_table_structure", "true")
-                .addFormDataPart("include_images", "true")
+                .addFormDataPart("include_images", includesImages(contentType) ? "true" : "false")
                 .addFormDataPart("include_page_images", "false")
                 .addFormDataPart("image_export_mode", "embedded");
         for (String language : properties.getOcrLanguages()) {
@@ -93,5 +93,18 @@ public class DoclingClient implements DocumentIntelligenceClient {
 
     private static String trimTrailingSlash(String url) {
         return url == null ? "" : url.replaceAll("/+$", "");
+    }
+
+    private static boolean needsOcr(String contentType) {
+        return contentType == null
+                || contentType.equals("application/pdf")
+                || contentType.startsWith("image/");
+    }
+
+    private static boolean includesImages(String contentType) {
+        return contentType == null
+                || contentType.equals("application/pdf")
+                || contentType.contains("presentation")
+                || contentType.contains("wordprocessing");
     }
 }

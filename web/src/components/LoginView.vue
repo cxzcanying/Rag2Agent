@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { auth } from '../api'
 
@@ -7,11 +7,27 @@ const emit = defineEmits(['success'])
 
 const mode = ref('login')
 const loading = ref(false)
-const form = ref({ username: '', password: '', nickname: '' })
+const registrationEnabled = ref(false)
+const inviteRequired = ref(true)
+const form = ref({ username: '', password: '', nickname: '', inviteCode: '' })
+
+onMounted(async () => {
+  try {
+    const options = await auth.registrationOptions()
+    registrationEnabled.value = Boolean(options.registrationEnabled)
+    inviteRequired.value = Boolean(options.inviteRequired)
+  } catch {
+    registrationEnabled.value = false
+  }
+})
 
 async function submit() {
   if (!form.value.username || !form.value.password) {
     ElMessage.warning('请输入用户名和密码')
+    return
+  }
+  if (mode.value === 'register' && inviteRequired.value && !form.value.inviteCode) {
+    ElMessage.warning('请输入邀请码')
     return
   }
   loading.value = true
@@ -44,13 +60,16 @@ async function submit() {
         <el-form-item v-if="mode === 'register'" label="昵称">
           <el-input v-model="form.nickname" placeholder="选填" />
         </el-form-item>
+        <el-form-item v-if="mode === 'register' && inviteRequired" label="邀请码">
+          <el-input v-model="form.inviteCode" placeholder="请输入管理员提供的邀请码" />
+        </el-form-item>
         <el-form-item label="密码">
           <el-input v-model="form.password" type="password" show-password placeholder="请输入密码" />
         </el-form-item>
         <el-button type="primary" :loading="loading" style="width: 100%" @click="submit">
           {{ mode === 'login' ? '登录' : '注册' }}
         </el-button>
-        <div class="switch">
+        <div v-if="registrationEnabled || mode === 'register'" class="switch">
           <el-link type="primary" @click="mode = mode === 'login' ? 'register' : 'login'">
             {{ mode === 'login' ? '没有账号？去注册' : '已有账号？去登录' }}
           </el-link>

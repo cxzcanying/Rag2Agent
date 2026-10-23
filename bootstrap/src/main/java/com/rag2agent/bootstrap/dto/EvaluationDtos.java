@@ -108,7 +108,15 @@ public final class EvaluationDtos {
             Double faithfulness,
             Double answerCorrectness,
             int latencyMs,
-            String errorMessage) {}
+            String errorMessage,
+            String caseType,
+            boolean evidenceHit,
+            Map<String, Object> evidenceResult,
+            String errorClass,
+            String traceId,
+            String judgeProvider,
+            String judgeModel,
+            String judgePromptVersion) {}
 
     public record RunReport(
             Long runId,

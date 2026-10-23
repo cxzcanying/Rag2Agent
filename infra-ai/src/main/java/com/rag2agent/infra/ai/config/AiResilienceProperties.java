@@ -7,6 +7,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "rag2agent.ai.resilience")
 public class AiResilienceProperties {
 
+    private long queueTimeoutMillis = 2_000;
+
     private boolean enabled = true;  //是否启用韧性策略
     private int maxAttempts = 3;  //最大重试次数，默认 3 次
     private long initialBackoffMillis = 200;  //初始退避时间，默认 200ms
@@ -32,4 +34,6 @@ public class AiResilienceProperties {
     public void setOpenStateMillis(long value) { this.openStateMillis = Math.max(100, value); }
     public int getMaxConcurrentRequests() { return maxConcurrentRequests; }
     public void setMaxConcurrentRequests(int value) { this.maxConcurrentRequests = Math.max(1, value); }
+    public long getQueueTimeoutMillis() { return queueTimeoutMillis; }
+    public void setQueueTimeoutMillis(long value) { this.queueTimeoutMillis = Math.max(0, value); }
 }

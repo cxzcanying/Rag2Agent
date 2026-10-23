@@ -15,6 +15,8 @@ import io.micrometer.observation.ObservationRegistry;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
@@ -54,6 +56,30 @@ class ToolExecutorTest {
             assertEquals(ErrorCode.INTERNAL_ERROR, exception.errorCode());
             assertEquals("工具执行失败", mapper.record.getErrorMessage());
             assertFalse(mapper.record.getErrorMessage().contains("credential-value"));
+        } finally {
+            pool.shutdown();
+        }
+    }
+
+    @Test
+    void rejectsToolOutsideWorkerWhitelistBeforeExecution() {
+        RecordingMapper mapper = new RecordingMapper();
+        ThreadPoolTaskExecutor pool = pool();
+        AtomicBoolean executed = new AtomicBoolean();
+        try {
+            ToolExecutor executor = executor(mapper, pool, tool(arguments -> {
+                executed.set(true);
+                return "unexpected";
+            }), 1000);
+
+            BusinessException exception = assertThrows(
+                    BusinessException.class,
+                    () -> executor.execute(
+                            7L, 9L, "test_tool", Map.of(), Set.of("allowed_tool")));
+
+            assertEquals(ErrorCode.FORBIDDEN, exception.errorCode());
+            assertFalse(executed.get());
+            assertEquals("FAILED", mapper.record.getStatus());
         } finally {
             pool.shutdown();
         }

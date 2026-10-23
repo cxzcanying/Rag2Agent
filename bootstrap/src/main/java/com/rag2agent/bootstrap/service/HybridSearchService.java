@@ -53,6 +53,7 @@ import org.springframework.stereotype.Service;
 public class HybridSearchService {
 
     private static final int GRAPH_CANDIDATE_LIMIT = 4;
+    private TokenCostService tokenCostService;
 
     private final JdbcTemplate jdbc;
     private final EmbeddingClient embeddingClient;
@@ -94,6 +95,11 @@ public class HybridSearchService {
         this.objectMapper = objectMapper;
         this.tableContextExpander = tableContextExpander;
         this.graphRetriever = graphRetriever;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setTokenCostService(TokenCostService tokenCostService) {
+        this.tokenCostService = tokenCostService;
     }
 
     public List<RetrievalResult> search(Long kbId, String query, int topK) {
@@ -268,11 +274,18 @@ public class HybridSearchService {
     private List<Float> embedQuery(String query) {
         return queryEmbeddingCache.getOrCompute(
                 embeddingClient.providerName(), embeddingClient.modelName(), query, () -> {
+            java.time.Instant startedAt = java.time.Instant.now();
             EmbeddingResponse response = Observation.createNotStarted(
                             "rag2agent.search.embedding", observationRegistry)
                     .lowCardinalityKeyValue("provider", embeddingClient.providerName())
                     .observe(() -> embeddingClient.embed(new EmbeddingRequest(
                             embeddingClient.providerName(), null, List.of(query))));
+            if (tokenCostService != null) {
+                tokenCostService.recordExternal(
+                        TokenCostService.CostContext.current("search.embedding", startedAt),
+                        embeddingClient.providerName(), embeddingClient.modelName(),
+                        "search.embedding", Math.max(1, query.length() / 2), 0);
+            }
             // 向量化失败宁可抛异常，也不返回空结果让上层误以为"没查到"
             if (response.vectors().isEmpty()) {
                 throw new IllegalStateException("查询向量化返回为空");
@@ -427,10 +440,19 @@ public class HybridSearchService {
      */
     private List<RetrievalResult> rerank(String query, List<RetrievalResult> fused, int topK) {
         List<String> contents = fused.stream().map(RetrievalResult::content).toList();
+        java.time.Instant startedAt = java.time.Instant.now();
         // top_n 不能超过候选数，否则 rerank 服务端会报错
         RerankResponse response = rerankClient.rerank(
                 new RerankRequest(
                         rerankClient.providerName(), null, query, contents, Math.min(topK, contents.size())));
+        if (tokenCostService != null) {
+            long inputTokens = Math.max(1, (query.length()
+                    + contents.stream().mapToLong(String::length).sum()) / 2);
+            tokenCostService.recordExternal(
+                    TokenCostService.CostContext.current("search.rerank", startedAt),
+                    rerankClient.providerName(), rerankClient.modelName(),
+                    "search.rerank", inputTokens, 0);
+        }
         return response.results().stream()
                 .filter(result -> result.index() >= 0 && result.index() < fused.size())
                 .sorted(Comparator.comparingDouble(RerankResult::score).reversed())

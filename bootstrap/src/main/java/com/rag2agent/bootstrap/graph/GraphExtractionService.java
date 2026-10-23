@@ -26,10 +26,16 @@ public class GraphExtractionService {
 
     private final ChatModelClient chatClient;
     private final ObjectMapper objectMapper;
+    private com.rag2agent.bootstrap.service.TokenCostService tokenCostService;
 
     public GraphExtractionService(ChatModelClient chatClient, ObjectMapper objectMapper) {
         this.chatClient = chatClient;
         this.objectMapper = objectMapper;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setTokenCostService(com.rag2agent.bootstrap.service.TokenCostService tokenCostService) {
+        this.tokenCostService = tokenCostService;
     }
 
     public ExtractionResult extract(StructuredDocument document) {
@@ -54,6 +60,7 @@ public class GraphExtractionService {
         if (elementText.isEmpty()) {
             return new ExtractionResult(List.of(), List.of());
         }
+        java.time.Instant startedAt = java.time.Instant.now();
         ChatCompletionResponse response = chatClient.complete(new ChatCompletionRequest(
                 chatClient.providerName(),
                 null,
@@ -68,6 +75,13 @@ public class GraphExtractionService {
                                 """),
                         new ChatMessage("user", source.toString())),
                 Map.of("max_tokens", 2048, "temperature", 0.0)));
+        if (tokenCostService != null) {
+            tokenCostService.record(
+                    com.rag2agent.bootstrap.service.TokenCostService.CostContext.current(
+                            "graph.extraction", startedAt),
+                    response.usage(), null, List.of(),
+                    chatClient.providerName(), chatClient.modelName());
+        }
         return parse(response.content(), elementText);
     }
 

@@ -83,6 +83,8 @@ public class IngestPipelineService {
     private final TransactionTemplate transactionTemplate;
     private final StringRedisTemplate redis;
     private final MeterRegistry meterRegistry;
+    private final DocumentQualityService qualityService = new DocumentQualityService();
+    private TokenCostService tokenCostService;
 
     public IngestPipelineService(
             DocumentMetaMapper documentMapper,
@@ -136,6 +138,11 @@ public class IngestPipelineService {
         this.objectMapper = objectMapper;
         this.graphIngestionService = graphIngestionService;
         this.visionEnrichmentService = visionEnrichmentService;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setTokenCostService(TokenCostService tokenCostService) {
+        this.tokenCostService = tokenCostService;
     }
 
     public void process(Long documentId) {
@@ -242,6 +249,25 @@ public class IngestPipelineService {
                     tempFile);
             structured = visionEnrichmentService.enrich(structured);
             ParsedDocument parsed = structured.toParsedDocument();
+            DocumentQualityService.QualityReport quality = qualityService.check(structured, parsed);
+            String qualityJson = toJson(Map.of(
+                    "accepted", quality.accepted(),
+                    "reason", quality.reason() == null ? "" : quality.reason(),
+                    "details", quality.details()));
+            documentMapper.update(null, new LambdaUpdateWrapper<DocumentMeta>()
+                    .eq(DocumentMeta::getId, documentId)
+                    .set(DocumentMeta::getParserName, String.valueOf(
+                            structured.metadata().getOrDefault("parser", "unknown")))
+                    .set(DocumentMeta::getQualityJson, qualityJson));
+            if (!quality.accepted()) {
+                ingestTaskService.markNeedsReview(task.getId(), quality.reason());
+                documentMapper.update(null, new LambdaUpdateWrapper<DocumentMeta>()
+                        .eq(DocumentMeta::getId, documentId)
+                        .set(DocumentMeta::getStatus, "NEEDS_REVIEW"));
+                log.warn("文档质量不合格，进入人工复核: documentId={}, reason={}, details={}",
+                        documentId, quality.reason(), quality.details());
+                return;
+            }
 
             // 空文本会生成 0 chunk 却标记成功，检索无结果但状态正常；这里提前拒绝
             if (parsed.text() == null || parsed.text().trim().length() < 50) {
@@ -257,12 +283,12 @@ public class IngestPipelineService {
             // 先清理"同文档+同版本"的残留 chunk：
             // 上次可能写到一半失败（如第 N 批 embedding 挂了），重试时先删再插，保证不产生重复/残缺数据
             chunkMapper.deleteByDocumentAndVersion(documentId, nextVersion);
-            persistChunks(document, chunks, nextVersion);
+            persistChunks(document, task.getId(), chunks, nextVersion);
             documentStructureRepository.replace(document, structured, nextVersion);
             graphIngestionService.index(document, structured, nextVersion);
 
             // 版本切换：更新文档版本 + 删除所有旧版本 chunk，同一事务内原子完成
-            switchVersion(documentId, nextVersion);
+            switchVersion(documentId, nextVersion, document.getTenantId());
             ingestTaskService.markIndexed(task.getId());
             log.info("文档 {} 入库完成", documentId);
         } catch (Exception e) {
@@ -284,7 +310,8 @@ public class IngestPipelineService {
         }
     }
 
-    private void persistChunks(DocumentMeta document, List<TextChunk> chunks, int version) {
+    private void persistChunks(
+            DocumentMeta document, Long taskId, List<TextChunk> chunks, int version) {
         // 分批向量化：Embedding API 有请求体大小限制，每批 16 条，平衡调用次数与单次耗时；
         // 走 QueryEmbeddingCache 的片段级缓存，相同文本切片在重复入库时可复用向量，省掉重复 embedding 调用；
         // 缓存 key 含 modelVersion/dimension，模型升级后旧 key 不命中，自然触发重算，不会新旧模型混用。
@@ -296,8 +323,7 @@ public class IngestPipelineService {
                     .toList();
             List<List<Float>> vectors = queryEmbeddingCache.getOrComputeBatch(
                     embeddingClient.providerName(), embeddingClient.modelName(), batchTexts,
-                    texts -> embeddingClient.embed(new EmbeddingRequest(
-                            embeddingClient.providerName(), null, texts)).vectors());
+                    texts -> embedBatch(document, taskId, texts));
             List<DocumentChunkMapper.ChunkRow> rows = new java.util.ArrayList<>(vectors.size());
             for (int i = 0; i < vectors.size(); i++) {
                 TextChunk chunk = chunks.get(start + i);
@@ -307,6 +333,7 @@ public class IngestPipelineService {
                 rows.add(new DocumentChunkMapper.ChunkRow(
                         document.getId(),
                         document.getKbId(),
+                        document.getTenantId(),
                         chunk.position(),
                         chunk.content(),
                         chunk.content().length(),
@@ -320,7 +347,35 @@ public class IngestPipelineService {
         }
     }
 
-    private void switchVersion(Long documentId, int version) {
+    private List<List<Float>> embedBatch(
+            DocumentMeta document, Long taskId, List<String> texts) {
+        java.time.Instant startedAt = java.time.Instant.now();
+        TokenCostService.CostContext context = new TokenCostService.CostContext(
+                UUID.randomUUID().toString(), taskId, null, null, document.getTenantId(),
+                "ingest.embedding", startedAt);
+        try {
+            List<List<Float>> vectors = embeddingClient.embed(new EmbeddingRequest(
+                    embeddingClient.providerName(), null, texts)).vectors();
+            if (tokenCostService != null) {
+                long inputTokens = Math.max(1, texts.stream()
+                        .mapToLong(String::length)
+                        .sum() / 2);
+                tokenCostService.recordExternal(
+                        context, embeddingClient.providerName(), embeddingClient.modelName(),
+                        "ingest.embedding", inputTokens, 0);
+            }
+            return vectors;
+        } catch (RuntimeException exception) {
+            if (tokenCostService != null) {
+                tokenCostService.recordFailure(
+                        context, embeddingClient.providerName(),
+                        embeddingClient.modelName(), "FAILED");
+            }
+            throw exception;
+        }
+    }
+
+    private void switchVersion(Long documentId, int version, Long tenantId) {
         // 事务边界：更新文档版本/状态 + 删除旧版本 chunk 必须原子完成。
         // 若只更新版本号而旧 chunk 未删净，检索会混入上一版内容，形成"版本新、数据旧"的中间态。
         transactionTemplate.executeWithoutResult(status -> {
@@ -332,7 +387,7 @@ public class IngestPipelineService {
                 throw new IllegalStateException("文档版本切换失败: " + documentId);
             }
             chunkMapper.deleteBelowVersion(documentId, version);
-            documentStructureRepository.deleteBelowVersion(documentId, version);
+            documentStructureRepository.deleteBelowVersion(documentId, version, tenantId);
         });
     }
 

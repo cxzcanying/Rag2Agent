@@ -213,8 +213,10 @@ public class EvaluationRepository {
             PreparedStatement statement = connection.prepareStatement("""
                     INSERT INTO eval_case_result
                         (run_id, case_id, first_relevant_rank, reciprocal_rank, returned_doc_ids,
-                         generated_answer, faithfulness, answer_correctness, latency_ms, error_message)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         generated_answer, faithfulness, answer_correctness, latency_ms, error_message,
+                         case_type, evidence_hit, evidence_result, error_class, trace_id,
+                         judge_provider, judge_model, judge_prompt_version)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?, ?, ?, ?)
                     ON CONFLICT (run_id, case_id) DO UPDATE SET
                         first_relevant_rank = EXCLUDED.first_relevant_rank,
                         reciprocal_rank = EXCLUDED.reciprocal_rank,
@@ -223,7 +225,15 @@ public class EvaluationRepository {
                         faithfulness = EXCLUDED.faithfulness,
                         answer_correctness = EXCLUDED.answer_correctness,
                         latency_ms = EXCLUDED.latency_ms,
-                        error_message = EXCLUDED.error_message
+                        error_message = EXCLUDED.error_message,
+                        case_type = EXCLUDED.case_type,
+                        evidence_hit = EXCLUDED.evidence_hit,
+                        evidence_result = EXCLUDED.evidence_result,
+                        error_class = EXCLUDED.error_class,
+                        trace_id = EXCLUDED.trace_id,
+                        judge_provider = EXCLUDED.judge_provider,
+                        judge_model = EXCLUDED.judge_model,
+                        judge_prompt_version = EXCLUDED.judge_prompt_version
                     """);
             statement.setLong(1, runId);
             statement.setLong(2, result.caseId());
@@ -235,6 +245,14 @@ public class EvaluationRepository {
             setNullableDouble(statement, 8, result.answerCorrectness());
             statement.setInt(9, result.latencyMs());
             statement.setString(10, result.errorMessage());
+            statement.setString(11, result.caseType());
+            statement.setBoolean(12, result.evidenceHit());
+            statement.setString(13, json(result.evidenceResult()));
+            statement.setString(14, result.errorClass());
+            statement.setString(15, result.traceId());
+            statement.setString(16, result.judgeProvider());
+            statement.setString(17, result.judgeModel());
+            statement.setString(18, result.judgePromptVersion());
             return statement;
         });
     }
@@ -396,7 +414,10 @@ public class EvaluationRepository {
                 """
                 SELECT r.case_id, c.question, r.first_relevant_rank, r.reciprocal_rank,
                        r.returned_doc_ids, r.generated_answer, r.faithfulness,
-                       r.answer_correctness, r.latency_ms, r.error_message
+                       r.answer_correctness, r.latency_ms, r.error_message,
+                       r.case_type, r.evidence_hit, CAST(r.evidence_result AS text) AS evidence_result,
+                       r.error_class, r.trace_id, r.judge_provider, r.judge_model,
+                       r.judge_prompt_version
                 FROM eval_case_result r
                 JOIN eval_case c ON c.id = r.case_id
                 WHERE r.run_id = ? ORDER BY r.id
@@ -411,7 +432,15 @@ public class EvaluationRepository {
                         nullableDouble(rs.getObject("faithfulness")),
                         nullableDouble(rs.getObject("answer_correctness")),
                         rs.getInt("latency_ms"),
-                        rs.getString("error_message")),
+                        rs.getString("error_message"),
+                        rs.getString("case_type"),
+                        rs.getBoolean("evidence_hit"),
+                        evidence(rs.getString("evidence_result")),
+                        rs.getString("error_class"),
+                        rs.getString("trace_id"),
+                        rs.getString("judge_provider"),
+                        rs.getString("judge_model"),
+                        rs.getString("judge_prompt_version")),
                 runId);
     }
 
@@ -424,11 +453,13 @@ public class EvaluationRepository {
     public Optional<EvalRun> findRun(long runId) {
         List<EvalRun> runs = jdbc.query(
                 """
-                SELECT r.id, r.kb_id, r.name, r.status, r.config::text, r.total_cases,
+                SELECT r.id, r.kb_id, kb.owner_user_id, r.name, r.status, r.config::text, r.total_cases,
                        (SELECT count(*) FROM eval_case_result cr WHERE cr.run_id = r.id) AS completed_cases,
                        r.hit_at_k, r.mrr, r.faithfulness, r.answer_correctness,
                        r.started_at, r.completed_at, r.error_message, r.request_fingerprint
-                FROM eval_run r WHERE r.id = ?
+                FROM eval_run r
+                JOIN knowledge_base kb ON kb.id = r.kb_id
+                WHERE r.id = ?
                 """,
                 (rs, rowNum) -> mapRun(rs), runId);
         return runs.stream().findFirst();
@@ -477,6 +508,7 @@ public class EvaluationRepository {
         return new EvalRun(
                 rs.getLong("id"),
                 rs.getLong("kb_id"),
+                rs.getObject("owner_user_id", Long.class),
                 rs.getString("name"),
                 rs.getString("status"),
                 rs.getString("config"),
@@ -597,6 +629,7 @@ public class EvaluationRepository {
     public record EvalRun(
             Long id,
             Long kbId,
+            Long ownerUserId,
             String name,
             String status,                // QUEUED | RUNNING | COMPLETED | COMPLETED_WITH_ERRORS | FAILED | CANCELLED | TIMEOUT
             String configJson,            // 评测配置（JSON）
@@ -609,5 +642,27 @@ public class EvaluationRepository {
             Instant startedAt,            // 开始时间
             Instant completedAt,          // 完成时间
             String errorMessage,          // 错误信息
-            String requestFingerprint) {} // 请求指纹
+            String requestFingerprint) {
+
+        public EvalRun(
+                Long id,
+                Long kbId,
+                String name,
+                String status,
+                String configJson,
+                int totalCases,
+                int completedCases,
+                Double hitAtK,
+                Double mrr,
+                Double faithfulness,
+                Double answerCorrectness,
+                Instant startedAt,
+                Instant completedAt,
+                String errorMessage,
+                String requestFingerprint) {
+            this(id, kbId, null, name, status, configJson, totalCases, completedCases,
+                    hitAtK, mrr, faithfulness, answerCorrectness,
+                    startedAt, completedAt, errorMessage, requestFingerprint);
+        }
+    }
 }

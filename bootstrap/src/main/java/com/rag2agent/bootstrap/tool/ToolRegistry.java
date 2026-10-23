@@ -3,6 +3,7 @@ package com.rag2agent.bootstrap.tool;
 import com.rag2agent.infra.ai.model.ToolDef;
 import com.rag2agent.mcp.registry.McpToolRegistry;
 import com.rag2agent.mcp.registry.McpToolRegistry.McpToolDefinition;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,6 +35,23 @@ public class ToolRegistry {
                         tool.descriptor().description(),
                         tool.descriptor().parameters()))
                 .toList();
+    }
+
+    public List<ToolDef> toolDefs(Collection<String> allowedNames) {
+        if (allowedNames == null || allowedNames.isEmpty()) {
+            return List.of();
+        }
+        return tools.values().stream()
+                .filter(tool -> allowedNames.contains(tool.descriptor().name()))
+                .map(tool -> new ToolDef(
+                        tool.descriptor().name(),
+                        tool.descriptor().description(),
+                        tool.descriptor().parameters()))
+                .toList();
+    }
+
+    public boolean isAllowed(String name, Collection<String> allowedNames) {
+        return allowedNames == null || allowedNames.contains(name);
     }
 
     public Tool get(String name) {

@@ -4,6 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.bootstrap.service.AgentMemoryService;
@@ -20,8 +24,15 @@ class AgentMemoryToolsTest {
         AgentMemoryService memory = mock(AgentMemoryService.class);
         KnowledgeBaseService kb = mock(KnowledgeBaseService.class);
         when(memory.search(2L, 3L, "项目偏好", 5)).thenReturn(List.of(
-                new MemoryRecord(1, 3L, "KB", "preference", "偏好简洁回答", "user", 0.8, 0.9)));
+                new MemoryRecord(
+                        1, 3L, "KB", "preference", "preference:简洁", "preference",
+                        "偏好简洁回答", "user", 0.8, "ACTIVE",
+                        java.time.Instant.now().toString(), 0.9)));
         when(memory.remember(2L, 3L, "KB", "fact", "项目使用 Java", "chat", 0.8, null))
+                .thenReturn(9L);
+        when(memory.remember(
+                anyLong(), anyLong(), anyString(), anyString(), anyString(),
+                anyString(), anyDouble(), any(), any(), any(), any(), any()))
                 .thenReturn(9L);
 
         SearchAgentMemoryTool search = new SearchAgentMemoryTool(

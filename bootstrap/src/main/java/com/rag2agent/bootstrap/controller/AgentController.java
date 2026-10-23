@@ -7,8 +7,11 @@ import com.rag2agent.bootstrap.agent.AgentExecutionResult;
 import com.rag2agent.bootstrap.agent.AgentEventStore;
 import com.rag2agent.bootstrap.agent.AgentRunService;
 import com.rag2agent.bootstrap.agent.AgentTaskService;
+import com.rag2agent.bootstrap.agent.AgentComparisonService;
 import com.rag2agent.bootstrap.agent.MultiAgentResearchService;
 import com.rag2agent.bootstrap.dto.AgentDtos.ApprovalRequest;
+import com.rag2agent.bootstrap.dto.AgentDtos.AgentComparisonRequest;
+import com.rag2agent.bootstrap.dto.AgentDtos.AgentComparisonResponse;
 import com.rag2agent.bootstrap.dto.AgentDtos.ChatRequest;
 import com.rag2agent.bootstrap.dto.AgentDtos.PersistedAgentEvent;
 import com.rag2agent.bootstrap.dto.AgentDtos.TeamResearchRequest;
@@ -51,12 +54,14 @@ public class AgentController {
     private final AgentEventStore durableEventStore;
     private final AgentTaskService taskService;
     private final MultiAgentResearchService multiAgentResearchService;
+    private final AgentComparisonService agentComparisonService;
 
     public AgentController(AgentRunService agentRunService, ObjectMapper objectMapper, Tracer tracer,
             AgentEventReplayStore eventStore,
             AgentEventStore durableEventStore,
             AgentTaskService taskService,
-            MultiAgentResearchService multiAgentResearchService) {
+            MultiAgentResearchService multiAgentResearchService,
+            AgentComparisonService agentComparisonService) {
         this.agentRunService = agentRunService;
         this.objectMapper = objectMapper;
         this.tracer = tracer;
@@ -64,6 +69,7 @@ public class AgentController {
         this.durableEventStore = durableEventStore;
         this.taskService = taskService;
         this.multiAgentResearchService = multiAgentResearchService;
+        this.agentComparisonService = agentComparisonService;
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -87,7 +93,9 @@ public class AgentController {
             response.setHeader("X-Trace-Id", traceId);
             AgentEvent traceEvent = new AgentEvent("trace", Map.of("traceId", traceId));
             pendingTraceEvent.set(traceEvent);
-            sendEvent(writer, traceEvent);
+            if (!sendEvent(writer, traceEvent)) {
+                return;
+            }
         }
 
         AtomicLong runId = new AtomicLong();
@@ -107,8 +115,18 @@ public class AgentController {
                                 }
                             }
                         }
-                        appendAndSend(runId.get(), writer, event);
+                        if (!appendAndSend(runId.get(), writer, event)) {
+                            throw new ClientDisconnectedException();
+                        }
                     });
+        } catch (ClientDisconnectedException disconnected) {
+            if (runId.get() > 0) {
+                try {
+                    agentRunService.cancel(userId, runId.get());
+                } catch (RuntimeException ignored) {
+                    // 运行可能已进入终态。
+                }
+            }
         } catch (Exception e) {
             // 响应可能已部分提交，只能以 SSE 事件形式返回错误
             if (e instanceof AiClientException aiException) {
@@ -139,7 +157,9 @@ public class AgentController {
             for (AgentEventReplayStore.StoredEvent stored : eventStore.readAfter(runId, cursor, 100)) {
                 try {
                     AgentEvent event = objectMapper.readValue(stored.payload(), AgentEvent.class);
-                    sendEvent(writer, event, stored.id());
+                    if (!sendEvent(writer, event, stored.id())) {
+                        return;
+                    }
                     cursor = stored.id();
                     emitted = true;
                 } catch (Exception ignored) {
@@ -221,11 +241,25 @@ public class AgentController {
                 multiAgentResearchService.research(StpUtil.getLoginIdAsLong(), request));
     }
 
-    private void sendEvent(PrintWriter writer, AgentEvent event) {
-        sendEvent(writer, event, null);
+    @PostMapping("/agent/teams/research/async")
+    public ApiResponse<TeamResearchResponse> teamResearchAsync(
+            @RequestBody @Valid TeamResearchRequest request) {
+        return ApiResponse.success(
+                multiAgentResearchService.submitAsync(StpUtil.getLoginIdAsLong(), request));
     }
 
-    private void appendAndSend(long runId, PrintWriter writer, AgentEvent event) {
+    @PostMapping("/agent/teams/compare")
+    public ApiResponse<AgentComparisonResponse> compare(
+            @RequestBody @Valid AgentComparisonRequest request) {
+        return ApiResponse.success(
+                agentComparisonService.compare(StpUtil.getLoginIdAsLong(), request));
+    }
+
+    private boolean sendEvent(PrintWriter writer, AgentEvent event) {
+        return sendEvent(writer, event, null);
+    }
+
+    private boolean appendAndSend(long runId, PrintWriter writer, AgentEvent event) {
         String eventId = null;
         if (runId > 0) {
             try {
@@ -234,10 +268,10 @@ public class AgentController {
                 // Redis 故障不能中断当前 Agent；客户端仍可收到实时事件。
             }
         }
-        sendEvent(writer, event, eventId);
+        return sendEvent(writer, event, eventId);
     }
 
-    private void sendEvent(PrintWriter writer, AgentEvent event, String eventId) {
+    private boolean sendEvent(PrintWriter writer, AgentEvent event, String eventId) {
         try {
             if (eventId != null) {
                 writer.write("id:" + eventId + "\n");
@@ -245,10 +279,13 @@ public class AgentController {
             writer.write("event:message\n");
             writer.write("data:" + objectMapper.writeValueAsString(event) + "\n\n");
             writer.flush();
+            return !writer.checkError();
         } catch (Exception ignored) {
-            // 客户端断开时忽略，避免影响主流程
+            return false;
         }
     }
+
+    private static final class ClientDisconnectedException extends RuntimeException {}
 
     private boolean isTerminal(String status) {
         return "COMPLETED".equals(status) || "DEGRADED".equals(status)

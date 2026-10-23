@@ -14,6 +14,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -121,6 +122,63 @@ class EvaluationServiceTest {
 
         assertEquals("CANCELLED", repository.status);
         assertTrue(repository.results.isEmpty());
+    }
+
+    @Test
+    void tableEvidenceRequiresTheExpectedRowWithinTheSameCandidate() {
+        var retrieved = List.of(
+                new com.rag2agent.rag.core.retrieval.RetrievalResult(
+                        "chunk-1", "内容", 0.9,
+                        Map.of("documentId", 99, "tableId", "table-4",
+                                "headers", List.of("指标", "2025", "2026"),
+                                "rowIds", List.of("row-16"))));
+        Map<String, Object> expected = Map.of(
+                "tableId", "table-4",
+                "headers", List.of("指标", "2025", "2026"),
+                "rowIds", List.of("row-17"));
+
+        var result = EvaluationService.matchEvidence("TABLE", expected, retrieved, 1);
+
+        assertEquals(false, result.get("hit"));
+        assertEquals(0, result.get("firstRank"));
+    }
+
+    @Test
+    void graphEvidenceUsesGraphNodesAndIgnoresTextCandidates() {
+        var retrieved = List.of(
+                new com.rag2agent.rag.core.retrieval.RetrievalResult(
+                        "text", "某公司", 0.9, Map.of("documentId", 99)),
+                new com.rag2agent.rag.core.retrieval.RetrievalResult(
+                        "graph", "公司 -> 产品", 0.8,
+                        Map.of("documentId", 99, "retrievalSource", "graph",
+                                "graphNodes", List.of("某公司", "产品A"))));
+
+        var result = EvaluationService.matchEvidence(
+                "GRAPH", Map.of("entities", List.of("某公司", "产品A"), "maxHops", 2),
+                retrieved, 1);
+
+        assertEquals(true, result.get("hit"));
+        assertEquals(2, result.get("firstRank"));
+    }
+
+    @Test
+    void agentEvidenceRequiresTerminalStatusToolAndStepBudget() {
+        var candidate = new com.rag2agent.rag.core.retrieval.RetrievalResult(
+                "agent", "工具执行完成", 1.0,
+                Map.of("toolNames", List.of("search_knowledge_base"),
+                        "stepCount", 3, "agentStatus", "COMPLETED"));
+        Map<String, Object> expected = Map.of(
+                "requiredTools", List.of("search_knowledge_base"),
+                "maxSteps", 4);
+
+        var hit = EvaluationService.matchEvidence(
+                "AGENT", expected, List.of(candidate), 0);
+        var exceeded = EvaluationService.matchEvidence(
+                "AGENT", Map.of("requiredTools", List.of("search_knowledge_base"),
+                        "maxSteps", 2), List.of(candidate), 0);
+
+        assertEquals(true, hit.get("hit"));
+        assertEquals(false, exceeded.get("hit"));
     }
 
     private static EvaluationService service(FakeRepository repository, Executor executor) {

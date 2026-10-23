@@ -15,6 +15,7 @@ public class AgentRun {
     private String sessionId;
     private String clientRequestId;
     private Long userId;
+    private Long kbId;
     private String status;
     private String query;
     private String answer;

@@ -7,9 +7,11 @@ rag2agent:
   mcp:
     server:
       enabled: ${MCP_SERVER_ENABLED:true}
-      token: ${MCP_SERVER_TOKEN:dev-mcp-token}
       required-scopes: ${MCP_SERVER_REQUIRED_SCOPES:mcp:read}
-      token-scopes: ${MCP_SERVER_TOKEN_SCOPES:mcp:read}
+      clients:
+        - name: ${MCP_SERVER_CLIENT_NAME:local-dev}
+          token: ${MCP_SERVER_TOKEN:dev-mcp-token}
+          scopes: ${MCP_SERVER_CLIENT_SCOPES:mcp:read}
       endpoint: ${MCP_SERVER_ENDPOINT:/mcp}
       server-name: ${MCP_SERVER_NAME:rag2agent-mcp}
       server-version: ${MCP_SERVER_VERSION:2.0.0}

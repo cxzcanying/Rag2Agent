@@ -37,33 +37,36 @@ public class DocumentStructureRepository {
 
     @Transactional
     public void replace(DocumentMeta document, StructuredDocument structured, int version) {
-        deleteVersion(document.getId(), version);
+        deleteVersion(document.getId(), version, document.getTenantId());
 
         List<Object[]> elements = new ArrayList<>();
         for (Element element : structured.elements()) {
             elements.add(new Object[] {
-                    element.id(), document.getId(), document.getKbId(), version, element.parentId(),
+                    element.id(), document.getId(), document.getKbId(), document.getTenantId(),
+                    version, element.parentId(),
                     element.type(), element.ordinal(), element.pageFrom(), element.pageTo(),
                     bbox(element.boundingBox()), element.text(), json(element.metadata())
             });
         }
         jdbc.batchUpdate("""
                 INSERT INTO document_element
-                    (element_id, document_id, kb_id, version, parent_element_id, element_type, ordinal,
+                    (element_id, document_id, kb_id, tenant_id, version, parent_element_id, element_type, ordinal,
                      page_from, page_to, bbox, text_content, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, CAST(? AS jsonb))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, CAST(? AS jsonb))
                 """, elements);
 
         List<Object[]> tables = new ArrayList<>();
         List<Object[]> rows = new ArrayList<>();
         for (Table table : structured.tables()) {
             tables.add(new Object[] {
-                    table.id(), document.getId(), document.getKbId(), version, table.title(),
+                    table.id(), document.getId(), document.getKbId(), document.getTenantId(),
+                    version, table.title(),
                     json(table.headers()), table.pageFrom(), table.pageTo(), bbox(table.boundingBox())
             });
             for (Row row : table.rows()) {
                 rows.add(new Object[] {
-                        row.id(), table.id(), document.getId(), document.getKbId(), version,
+                        row.id(), table.id(), document.getId(), document.getKbId(),
+                        document.getTenantId(), version,
                         row.ordinal(), json(row.cells()), row.semanticText(),
                         row.page(), bbox(row.boundingBox())
                 });
@@ -71,14 +74,14 @@ public class DocumentStructureRepository {
         }
         jdbc.batchUpdate("""
                 INSERT INTO document_table
-                    (table_id, document_id, kb_id, version, title, headers, page_from, page_to, bbox)
-                VALUES (?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?, CAST(? AS jsonb))
+                    (table_id, document_id, kb_id, tenant_id, version, title, headers, page_from, page_to, bbox)
+                VALUES (?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?, CAST(? AS jsonb))
                 """, tables);
         jdbc.batchUpdate("""
                 INSERT INTO document_table_row
-                    (row_id, table_id, document_id, kb_id, version, row_index, cells,
+                    (row_id, table_id, document_id, kb_id, tenant_id, version, row_index, cells,
                      semantic_text, page_no, bbox)
-                VALUES (?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?, CAST(? AS jsonb))
+                VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?, CAST(? AS jsonb))
                 """, rows);
 
         List<Object[]> assets = new ArrayList<>();
@@ -100,7 +103,8 @@ public class DocumentStructureRepository {
                 }
             }
             assets.add(new Object[] {
-                    asset.id(), document.getId(), document.getKbId(), version, asset.id(),
+                    asset.id(), document.getId(), document.getKbId(), document.getTenantId(),
+                    version, asset.id(),
                     asset.type(), asset.title(), contentReference, asset.page(),
                     bbox(asset.boundingBox()), json(Map.of(
                             "contentType", asset.contentType() == null ? "" : asset.contentType(),
@@ -109,25 +113,33 @@ public class DocumentStructureRepository {
         }
         jdbc.batchUpdate("""
                 INSERT INTO document_asset
-                    (asset_id, document_id, kb_id, version, source_element_id, asset_type,
+                    (asset_id, document_id, kb_id, tenant_id, version, source_element_id, asset_type,
                      title, content_reference, page_no, bbox, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), CAST(? AS jsonb))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), CAST(? AS jsonb))
                 """, assets);
     }
 
     @Transactional
-    public void deleteBelowVersion(Long documentId, int version) {
-        jdbc.update("DELETE FROM document_table_row WHERE document_id = ? AND version < ?", documentId, version);
-        jdbc.update("DELETE FROM document_table WHERE document_id = ? AND version < ?", documentId, version);
-        jdbc.update("DELETE FROM document_asset WHERE document_id = ? AND version < ?", documentId, version);
-        jdbc.update("DELETE FROM document_element WHERE document_id = ? AND version < ?", documentId, version);
+    public void deleteBelowVersion(Long documentId, int version, Long tenantId) {
+        jdbc.update("DELETE FROM document_table_row WHERE document_id = ? AND tenant_id = ? AND version < ?",
+                documentId, tenantId, version);
+        jdbc.update("DELETE FROM document_table WHERE document_id = ? AND tenant_id = ? AND version < ?",
+                documentId, tenantId, version);
+        jdbc.update("DELETE FROM document_asset WHERE document_id = ? AND tenant_id = ? AND version < ?",
+                documentId, tenantId, version);
+        jdbc.update("DELETE FROM document_element WHERE document_id = ? AND tenant_id = ? AND version < ?",
+                documentId, tenantId, version);
     }
 
-    private void deleteVersion(Long documentId, int version) {
-        jdbc.update("DELETE FROM document_table_row WHERE document_id = ? AND version = ?", documentId, version);
-        jdbc.update("DELETE FROM document_table WHERE document_id = ? AND version = ?", documentId, version);
-        jdbc.update("DELETE FROM document_asset WHERE document_id = ? AND version = ?", documentId, version);
-        jdbc.update("DELETE FROM document_element WHERE document_id = ? AND version = ?", documentId, version);
+    private void deleteVersion(Long documentId, int version, Long tenantId) {
+        jdbc.update("DELETE FROM document_table_row WHERE document_id = ? AND tenant_id = ? AND version = ?",
+                documentId, tenantId, version);
+        jdbc.update("DELETE FROM document_table WHERE document_id = ? AND tenant_id = ? AND version = ?",
+                documentId, tenantId, version);
+        jdbc.update("DELETE FROM document_asset WHERE document_id = ? AND tenant_id = ? AND version = ?",
+                documentId, tenantId, version);
+        jdbc.update("DELETE FROM document_element WHERE document_id = ? AND tenant_id = ? AND version = ?",
+                documentId, tenantId, version);
     }
 
     private String bbox(BoundingBox box) {
@@ -189,6 +201,30 @@ public class DocumentStructureRepository {
                         rs.getObject("page_no", Integer.class),
                         boundingBox(rs.getString("bbox"))),
                 documentId, version, tableId, afterRowIndex, limit);
+    }
+
+    public List<RowRecord> findRowsByIds(
+            Long documentId, int version, String tableId, List<String> rowIds) {
+        if (rowIds == null || rowIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.query("""
+                SELECT row_id, row_index, CAST(cells AS text) AS cells, semantic_text,
+                       page_no, CAST(bbox AS text) AS bbox
+                FROM document_table_row
+                WHERE document_id = ? AND version = ? AND table_id = ?
+                  AND row_id = ANY(CAST(? AS text[]))
+                ORDER BY row_index
+                """, (rs, rowNum) -> new RowRecord(
+                rs.getString("row_id"),
+                rs.getInt("row_index"),
+                stringList(rs.getString("cells")),
+                rs.getString("semantic_text"),
+                rs.getObject("page_no", Integer.class),
+                boundingBox(rs.getString("bbox"))),
+                documentId, version, tableId,
+                rowIds.stream().map(id -> "\"" + id.replace("\"", "\\\"") + "\"")
+                        .collect(java.util.stream.Collectors.joining(",", "{", "}")));
     }
 
     public List<RowRecord> findRowsAround(

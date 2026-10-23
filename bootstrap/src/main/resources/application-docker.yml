@@ -1,8 +1,8 @@
 spring:
   datasource:
     url: jdbc:postgresql://postgres:5432/${POSTGRES_DB:rag2agent}
-    username: ${POSTGRES_USER:rag2agent}
-    password: ${POSTGRES_PASSWORD:rag2agent}
+    username: ${POSTGRES_APP_USER:rag2agent_app}
+    password: ${POSTGRES_APP_PASSWORD:rag2agent}
     driver-class-name: org.postgresql.Driver
   data:
     redis:

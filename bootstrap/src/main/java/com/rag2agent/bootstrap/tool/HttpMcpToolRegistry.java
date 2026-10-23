@@ -14,7 +14,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 /** MCP 2.0 Streamable HTTP 客户端；远程服务异常时由 ToolRegistry 保留本地工具。 */
 @Component
@@ -26,7 +29,14 @@ public class HttpMcpToolRegistry implements McpToolRegistry {
     private final McpRemoteProperties properties;
     private volatile McpSyncClient client;
 
-    public HttpMcpToolRegistry(McpRemoteProperties properties) {
+    public HttpMcpToolRegistry(McpRemoteProperties properties, Environment environment) {
+        if (!StringUtils.hasText(properties.getToken())) {
+            throw new IllegalStateException("远端 MCP 客户端缺少 token");
+        }
+        if (environment.acceptsProfiles(Profiles.of("prod", "production"))
+                && "dev-mcp-token".equals(properties.getToken())) {
+            throw new IllegalStateException("正式环境禁止使用默认远端 MCP token");
+        }
         this.properties = properties;
     }
 
@@ -90,8 +100,7 @@ public class HttpMcpToolRegistry implements McpToolRegistry {
                 ? "/mcp"
                 : endpoint.getRawPath();
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                .header("Authorization", "Bearer " + properties.getToken())
-                .header("X-MCP-Scopes", properties.getScopes());
+                .header("Authorization", "Bearer " + properties.getToken());
         HttpClientStreamableHttpTransport transport =
                 HttpClientStreamableHttpTransport.builder(baseUrl)
                         .endpoint(path)

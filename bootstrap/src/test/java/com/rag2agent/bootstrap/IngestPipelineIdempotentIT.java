@@ -3,6 +3,7 @@ package com.rag2agent.bootstrap;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.rag2agent.bootstrap.service.IngestPipelineService;
+import com.rag2agent.bootstrap.tenancy.TenantContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -29,6 +30,10 @@ class IngestPipelineIdempotentIT {
 
     @Test
     void repeatedProcessDoesNotDuplicateChunks() {
+        TenantContext.runAsSystem(this::verifyIdempotency);
+    }
+
+    private void verifyIdempotency() {
         long beforeChunks = chunkCount();
         int beforeVersion = documentVersion();
 

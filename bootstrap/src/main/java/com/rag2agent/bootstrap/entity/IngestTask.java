@@ -13,10 +13,12 @@ public class IngestTask {
     @TableId(type = IdType.AUTO)
     private Long id;
     private Long documentId;
+    private Long tenantId;
     private String status;
     private String currentStage;
     private Integer retryCount;
     private String errorMessage;
+    private String qualityJson;
     private Instant createdAt;
     private Instant updatedAt;
 }

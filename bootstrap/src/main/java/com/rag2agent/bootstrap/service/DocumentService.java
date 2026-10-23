@@ -6,6 +6,7 @@ import com.rag2agent.bootstrap.entity.DocumentMeta;
 import com.rag2agent.bootstrap.entity.IngestTask;
 import com.rag2agent.bootstrap.mapper.DocumentMetaMapper;
 import com.rag2agent.bootstrap.storage.MinioStorageService;
+import com.rag2agent.bootstrap.tenancy.TenantContext;
 import com.rag2agent.framework.common.ErrorCode;
 import com.rag2agent.framework.exception.BusinessException;
 import com.rag2agent.infra.ai.config.DoclingProperties;
@@ -34,6 +35,7 @@ public class DocumentService {
     private final IngestMessageService ingestMessageService;
     private final KnowledgeBaseService knowledgeBaseService;
     private final DoclingProperties doclingProperties;
+    private final FileValidationService fileValidation;
 
     public DocumentService(
             DocumentMetaMapper documentMapper,
@@ -41,13 +43,15 @@ public class DocumentService {
             IngestTaskService ingestTaskService,
             IngestMessageService ingestMessageService,
             KnowledgeBaseService knowledgeBaseService,
-            DoclingProperties doclingProperties) {
+            DoclingProperties doclingProperties,
+            FileValidationService fileValidation) {
         this.documentMapper = documentMapper;
         this.storage = storage;
         this.ingestTaskService = ingestTaskService;
         this.ingestMessageService = ingestMessageService;
         this.knowledgeBaseService = knowledgeBaseService;
         this.doclingProperties = doclingProperties;
+        this.fileValidation = fileValidation;
     }
 
     public DocumentView upload(Long userId, Long kbId, MultipartFile file) {
@@ -67,9 +71,10 @@ public class DocumentService {
             throw new BusinessException(ErrorCode.BAD_REQUEST,
                     "支持的文档类型: PDF、DOCX、PPTX、XLSX、HTML、图片和邮件");
         }
-        if (!doclingProperties.isEnabled() && !"pdf".equals(ext)) {
+        fileValidation.validate(file, ext);
+        if (!doclingProperties.isEnabled() && !"pdf".equals(ext) && !"xlsx".equals(ext)) {
             throw new BusinessException(ErrorCode.BAD_REQUEST,
-                    "当前仅启用 PDF 解析；其他格式需要开启 Docling 文档智能服务");
+                    "当前仅启用 PDF/XLSX 本地解析；其他格式需要开启 Docling 文档智能服务");
         }
 
         String objectKey =
@@ -83,6 +88,7 @@ public class DocumentService {
 
         DocumentMeta doc = new DocumentMeta();
         doc.setKbId(kbId);
+        doc.setTenantId(TenantContext.requireTenantId());
         doc.setFileName(fileName);
         doc.setFileType(ext);
         doc.setStoragePath(objectKey);
@@ -90,9 +96,9 @@ public class DocumentService {
         doc.setVersion(1);
         doc.setStatus("UPLOADED");
         documentMapper.insert(doc);
-        Long taskId = ingestTaskService.create(doc.getId());
+        Long taskId = ingestTaskService.create(doc.getId(), doc.getTenantId());
         try {
-            ingestMessageService.sendIngestTask(doc.getId(), taskId);
+            ingestMessageService.sendIngestTask(doc.getId(), taskId, doc.getTenantId());
         } catch (Exception e) {
             // 消息发送失败时文档和任务已落库，标记任务失败避免留下永远无人处理的 PENDING 脏数据
             ingestTaskService.markFailed(taskId, "入库消息发送失败: " + e.getMessage());
@@ -160,7 +166,7 @@ public class DocumentService {
         }
         ingestTaskService.resetToPending(task.getId());
         try {
-            ingestMessageService.sendIngestTask(documentId, task.getId());
+            ingestMessageService.sendIngestTask(documentId, task.getId(), doc.getTenantId());
         } catch (Exception e) {
             ingestTaskService.markFailed(task.getId(), "入库消息发送失败: " + e.getMessage());
             throw e;

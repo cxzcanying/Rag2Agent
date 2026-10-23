@@ -18,7 +18,7 @@ class DocumentChunkMapperTest {
                 return chunks.size();
             }
 
-            @Override public int insertChunk(Long documentId, Long kbId, int chunkIndex, String content,
+            @Override public int insertChunk(Long documentId, Long kbId, Long tenantId, int chunkIndex, String content,
                     int tokenCount, String embedding, Integer pageNumber, String metadata, int version) { return 0; }
             @Override public int deleteByDocumentAndVersion(Long documentId, int version) { return 0; }
             @Override public int deleteBelowVersion(Long documentId, int version) { return 0; }

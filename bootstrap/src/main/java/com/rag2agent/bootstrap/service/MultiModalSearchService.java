@@ -26,6 +26,7 @@ public class MultiModalSearchService {
     private final VisionClient visionClient;
     private final DocumentIntelligenceClient documentClient;
     private final DoclingProperties doclingProperties;
+    private TokenCostService tokenCostService;
 
     public MultiModalSearchService(
             KnowledgeBaseService knowledgeBaseService,
@@ -38,6 +39,11 @@ public class MultiModalSearchService {
         this.visionClient = visionClient;
         this.documentClient = documentClient;
         this.doclingProperties = doclingProperties;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setTokenCostService(TokenCostService tokenCostService) {
+        this.tokenCostService = tokenCostService;
     }
 
     public MultimodalSearchResponse search(
@@ -60,7 +66,7 @@ public class MultiModalSearchService {
         }
         String effectiveQuery = query == null ? "" : query.trim();
         if (hasImage) {
-            String description = describeImage(new VisionRequest(
+            String description = describeImage(userId, new VisionRequest(
                     """
                     将图片转成用于企业知识库检索的简洁描述。
                     提取图中文字、实体、指标、图表趋势和与用户问题相关的对象。
@@ -77,12 +83,26 @@ public class MultiModalSearchService {
         return new MultimodalSearchResponse(effectiveQuery, hasImage, results);
     }
 
-    private String describeImage(VisionRequest request) {
+    private String describeImage(Long userId, VisionRequest request) {
         RuntimeException visionFailure = null;
         if (visionClient.available()) {
+            java.time.Instant startedAt = java.time.Instant.now();
+            var context = new TokenCostService.CostContext(
+                    java.util.UUID.randomUUID().toString(), null, null, userId,
+                    com.rag2agent.bootstrap.tenancy.TenantContext.getTenantId(),
+                    "vision.multimodal_search", startedAt);
             try {
-                return visionClient.describe(request).content();
+                var result = visionClient.describe(request);
+                if (tokenCostService != null) {
+                    tokenCostService.recordVision(context, request.prompt(), result);
+                }
+                return result.content();
             } catch (RuntimeException exception) {
+                if (tokenCostService != null) {
+                    tokenCostService.recordFailure(
+                            context, visionClient.providerName(),
+                            visionClient.modelName(), "FAILED");
+                }
                 visionFailure = exception;
                 log.warn("Vision 描述失败，尝试 Docling OCR 降级: reason={}",
                         exception.getMessage());

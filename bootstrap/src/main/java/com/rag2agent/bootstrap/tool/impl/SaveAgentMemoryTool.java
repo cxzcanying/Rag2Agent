@@ -36,7 +36,9 @@ public class SaveAgentMemoryTool implements Tool {
                                 "kb_id", Map.of("type", "integer", "description", "知识库 ID"),
                                 "content", Map.of("type", "string", "description", "记忆内容，最多 4000 字"),
                                 "memory_type", Map.of("type", "string", "description", "事实/偏好/决策"),
-                                "source", Map.of("type", "string", "description", "来源说明")),
+                                "source", Map.of("type", "string", "description", "来源说明"),
+                                "entity_key", Map.of("type", "string", "description", "可选实体键"),
+                                "predicate", Map.of("type", "string", "description", "可选谓词")),
                         "required", List.of("kb_id", "content", "memory_type", "source")),
                 true);
     }
@@ -56,6 +58,10 @@ public class SaveAgentMemoryTool implements Tool {
                 (String) arguments.get("content"),
                 (String) arguments.get("source"),
                 0.8,
+                null,
+                (String) arguments.get("entity_key"),
+                (String) arguments.get("predicate"),
+                null,
                 null);
         return "记忆已保存: " + id;
     }

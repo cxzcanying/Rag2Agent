@@ -108,4 +108,16 @@ public interface KnowledgeBaseMapper extends BaseMapper<KnowledgeBase> {
             @Param("kbId") Long kbId,
             @Param("userId") Long userId,
             @Param("tenantId") Long tenantId);
+
+    @Select("""
+            SELECT COUNT(*)
+            FROM knowledge_base kb
+            WHERE kb.id = #{kbId}
+              AND kb.owner_user_id = #{userId}
+              AND kb.tenant_id = #{tenantId}
+            """)
+    int countOwner(
+            @Param("kbId") Long kbId,
+            @Param("userId") Long userId,
+            @Param("tenantId") Long tenantId);
 }

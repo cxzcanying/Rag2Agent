@@ -17,6 +17,9 @@ import com.rag2agent.bootstrap.entity.AgentRun;
 import com.rag2agent.bootstrap.mapper.AgentRunMapper;
 import com.rag2agent.bootstrap.service.HybridSearchService;
 import com.rag2agent.bootstrap.service.KnowledgeBaseService;
+import com.rag2agent.bootstrap.service.TokenCostService;
+import com.rag2agent.bootstrap.tool.ToolExecutor;
+import com.rag2agent.bootstrap.tool.ToolRegistry;
 import com.rag2agent.infra.ai.client.ChatModelClient;
 import com.rag2agent.infra.ai.model.ChatCompletionRequest;
 import com.rag2agent.infra.ai.model.ChatCompletionResponse;
@@ -67,6 +70,9 @@ class MultiAgentResearchServiceTest {
             @Override
             public ChatCompletionResponse complete(ChatCompletionRequest request) {
                 String system = request.messages().getFirst().content();
+                if (system.contains("comparison Worker")) {
+                    throw new IllegalStateException("test worker failure");
+                }
                 String content = system.contains("复核 Agent")
                         ? "{\"approved\":true,\"answer\":\"营收增长 10% [1]\"}"
                         : "营收增长 10% [1]";
@@ -82,11 +88,12 @@ class MultiAgentResearchServiceTest {
         };
         MultiAgentResearchService service = new MultiAgentResearchService(
                 runs, tasks, search, chat, mock(KnowledgeBaseService.class), new ObjectMapper(),
-                new AgentProperties(), Runnable::run);
+                new AgentProperties(), Runnable::run, Runnable::run,
+                mock(TokenCostService.class), mock(ToolRegistry.class), mock(ToolExecutor.class));
 
         var result = service.research(2L, new TeamResearchRequest(3L, "比较营收"));
 
-        assertEquals("COMPLETED", result.status());
+        assertEquals("DEGRADED", result.status());
         assertEquals("营收增长 10% [1]", result.answer());
         assertEquals(1, result.references().size());
     }
@@ -148,7 +155,8 @@ class MultiAgentResearchServiceTest {
         try {
             MultiAgentResearchService service = new MultiAgentResearchService(
                     runs, tasks, search, chat, mock(KnowledgeBaseService.class), new ObjectMapper(),
-                    new AgentProperties(), executor);
+                    new AgentProperties(), executor, executor,
+                    mock(TokenCostService.class), mock(ToolRegistry.class), mock(ToolExecutor.class));
 
             var result = service.research(2L, new TeamResearchRequest(3L, "分析营收"));
 
@@ -209,11 +217,12 @@ class MultiAgentResearchServiceTest {
         };
         MultiAgentResearchService service = new MultiAgentResearchService(
                 runs, tasks, search, chat, mock(KnowledgeBaseService.class), new ObjectMapper(),
-                new AgentProperties(), Runnable::run);
+                new AgentProperties(), Runnable::run, Runnable::run,
+                mock(TokenCostService.class), mock(ToolRegistry.class), mock(ToolExecutor.class));
 
         var result = service.research(2L, new TeamResearchRequest(3L, "分析风险"));
 
-        assertEquals("DEGRADED", result.status());
+        assertEquals("COMPLETED", result.status());
         assertEquals("存在供应风险 [1]", result.answer());
     }
 }

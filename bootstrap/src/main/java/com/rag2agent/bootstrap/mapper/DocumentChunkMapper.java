@@ -24,6 +24,7 @@ public interface DocumentChunkMapper {
     record ChunkRow(
             Long documentId,
             Long kbId,
+            Long tenantId,
             int chunkIndex,
             String content,
             int tokenCount,
@@ -39,10 +40,10 @@ public interface DocumentChunkMapper {
     @Insert({
         "<script>",
         "INSERT INTO document_chunk",
-        "(document_id, kb_id, chunk_index, content, token_count, embedding, page_number, metadata, version)",
+        "(document_id, kb_id, tenant_id, chunk_index, content, token_count, embedding, page_number, metadata, version)",
         "VALUES",
         "<foreach collection='chunks' item='chunk' separator=','>",
-        "(#{chunk.documentId}, #{chunk.kbId}, #{chunk.chunkIndex}, #{chunk.content}, #{chunk.tokenCount},",
+        "(#{chunk.documentId}, #{chunk.kbId}, #{chunk.tenantId}, #{chunk.chunkIndex}, #{chunk.content}, #{chunk.tokenCount},",
         "#{chunk.embedding}::vector, #{chunk.pageNumber}, CAST(#{chunk.metadata} AS jsonb), #{chunk.version})",
         "</foreach>",
         "</script>"
@@ -51,14 +52,15 @@ public interface DocumentChunkMapper {
 
     @Insert("""
             INSERT INTO document_chunk
-                (document_id, kb_id, chunk_index, content, token_count, embedding, page_number, metadata, version)
+                (document_id, kb_id, tenant_id, chunk_index, content, token_count, embedding, page_number, metadata, version)
             VALUES
-                (#{documentId}, #{kbId}, #{chunkIndex}, #{content}, #{tokenCount},
+                (#{documentId}, #{kbId}, #{tenantId}, #{chunkIndex}, #{content}, #{tokenCount},
                  #{embedding}::vector, #{pageNumber}, CAST(#{metadata} AS jsonb), #{version})
             """)
     int insertChunk(
             @Param("documentId") Long documentId,
             @Param("kbId") Long kbId,
+            @Param("tenantId") Long tenantId,
             @Param("chunkIndex") int chunkIndex,
             @Param("content") String content,
             @Param("tokenCount") int tokenCount,

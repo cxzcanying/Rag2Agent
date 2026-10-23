@@ -8,6 +8,7 @@ import com.rag2agent.rag.core.document.ParsedDocument;
 import com.rag2agent.rag.core.document.StructuredDocument;
 import com.rag2agent.rag.core.document.impl.DoclingDocumentMapper;
 import com.rag2agent.rag.core.document.impl.PdfBoxDocumentParser;
+import com.rag2agent.rag.core.document.impl.ExcelDocumentParser;
 import java.nio.file.Path;
 import java.util.Locale;
 import java.util.Map;
@@ -54,6 +55,21 @@ public class DocumentParseService {
         if (!SUPPORTED_EXTENSIONS.contains(extension)) {
             throw new IllegalArgumentException("不支持的文档类型: " + fileType);
         }
+        if ("xlsx".equals(extension)) {
+            return new ExcelDocumentParser().parse(documentId, fileName, file);
+        }
+        if ("pdf".equals(extension)) {
+            try {
+                ParsedDocument parsed = new PdfBoxDocumentParser().parse(new DocumentSource(
+                        documentId, fileName, file.toUri(), "application/pdf", Map.of()));
+                if (usableText(parsed.text())) {
+                    return StructuredDocument.fromParsed(parsed, "pdfbox");
+                }
+            } catch (RuntimeException exception) {
+                log.warn("PDFBox 文本提取失败，尝试 Docling: file={}, reason={}",
+                        fileName, exception.getMessage());
+            }
+        }
         if (properties.isEnabled()) {
             try {
                 DocumentIntelligenceResult result = client.convert(
@@ -70,13 +86,7 @@ public class DocumentParseService {
         if (!"pdf".equals(extension)) {
             throw new IllegalStateException("非 PDF 文档需要启用 Docling 文档智能服务");
         }
-        ParsedDocument parsed = new PdfBoxDocumentParser().parse(new DocumentSource(
-                documentId,
-                fileName,
-                file.toUri(),
-                "application/pdf",
-                Map.of()));
-        return StructuredDocument.fromParsed(parsed, "pdfbox");
+        throw new IllegalStateException("文本型 PDF 未提取到可用内容，需要启用 Docling OCR");
     }
 
     public static boolean supports(String fileType) {
@@ -85,5 +95,16 @@ public class DocumentParseService {
 
     public static String normalizeExtension(String fileType) {
         return fileType == null ? "" : fileType.toLowerCase(Locale.ROOT);
+    }
+
+    private boolean usableText(String text) {
+        if (text == null || text.trim().length() < 50) {
+            return false;
+        }
+        long printable = text.codePoints()
+                .filter(cp -> Character.isLetterOrDigit(cp) || Character.isWhitespace(cp)
+                        || "，。；：、（）【】《》.,;:()[]".indexOf(cp) >= 0)
+                .count();
+        return printable >= text.codePoints().count() * 0.7;
     }
 }

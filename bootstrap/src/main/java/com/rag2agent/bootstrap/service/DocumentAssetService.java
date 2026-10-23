@@ -21,6 +21,7 @@ public class DocumentAssetService {
     private final DocumentStructureRepository repository;
     private final MinioStorageService storage;
     private final VisionClient visionClient;
+    private TokenCostService tokenCostService;
 
     public DocumentAssetService(
             DocumentService documentService,
@@ -31,6 +32,11 @@ public class DocumentAssetService {
         this.repository = repository;
         this.storage = storage;
         this.visionClient = visionClient;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setTokenCostService(TokenCostService tokenCostService) {
+        this.tokenCostService = tokenCostService;
     }
 
     public AssetView presign(
@@ -68,14 +74,32 @@ public class DocumentAssetService {
         if (asset.contentReference() == null || asset.contentReference().isBlank()) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "资产内容不可用");
         }
+        byte[] image;
+        try {
+            image = storage.download(asset.contentReference());
+        } catch (Exception exception) {
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR, "读取资产内容失败");
+        }
+        var context = new TokenCostService.CostContext(
+                java.util.UUID.randomUUID().toString(), null, null, userId,
+                com.rag2agent.bootstrap.tenancy.TenantContext.getTenantId(),
+                "vision.asset_describe", java.time.Instant.now());
         try {
             VisionResult result = visionClient.describe(new VisionRequest(
-                    prompt, storage.download(asset.contentReference()), asset.contentType()));
+                    prompt, image, asset.contentType()));
+            if (tokenCostService != null) {
+                tokenCostService.recordVision(context, prompt, result);
+            }
             return new DescribeAssetResponse(
                     assetId, result.content(), result.provider(), result.model());
         } catch (BusinessException exception) {
             throw exception;
         } catch (Exception exception) {
+            if (tokenCostService != null) {
+                tokenCostService.recordFailure(
+                        context,
+                        visionClient.providerName(), visionClient.modelName(), "FAILED");
+            }
             throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "图片理解失败");
         }
     }

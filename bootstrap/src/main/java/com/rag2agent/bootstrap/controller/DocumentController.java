@@ -5,6 +5,7 @@ import com.rag2agent.bootstrap.dto.DocumentDtos.DocumentView;
 import com.rag2agent.bootstrap.dto.DocumentDtos.PresignResponse;
 import com.rag2agent.bootstrap.service.DocumentService;
 import com.rag2agent.bootstrap.service.IdempotencyService;
+import com.rag2agent.bootstrap.service.KnowledgeBaseService;
 import com.rag2agent.framework.common.ApiResponse;
 import java.util.List;
 import java.util.Map;
@@ -27,11 +28,17 @@ public class DocumentController {
     private final DocumentService documentService;
     private final IdempotencyService idempotency;
     private final ObjectMapper objectMapper;
+    private final KnowledgeBaseService knowledgeBaseService;
 
-    public DocumentController(DocumentService documentService, IdempotencyService idempotency, ObjectMapper objectMapper) {
+    public DocumentController(
+            DocumentService documentService,
+            IdempotencyService idempotency,
+            ObjectMapper objectMapper,
+            KnowledgeBaseService knowledgeBaseService) {
         this.documentService = documentService;
         this.idempotency = idempotency;
         this.objectMapper = objectMapper;
+        this.knowledgeBaseService = knowledgeBaseService;
     }
 
     @PostMapping("/upload")
@@ -39,6 +46,7 @@ public class DocumentController {
             @RequestParam("file") MultipartFile file, @RequestParam("kbId") Long kbId,
             @org.springframework.web.bind.annotation.RequestHeader(value = "Idempotency-Key", required = false) String key) {
         Long userId = StpUtil.getLoginIdAsLong();
+        knowledgeBaseService.requireWritable(userId, kbId);
         Map<String, Object> request = Map.of("kbId", String.valueOf(kbId), "name", file == null ? "" : String.valueOf(file.getOriginalFilename()),
                 "size", file == null ? 0 : file.getSize(), "sha256", checksum(file));
         String cached = idempotency.reserve(userId, "document:upload", key, request);

@@ -22,6 +22,7 @@ class QueryEmbeddingCacheTest {
         QueryEmbeddingCache cache = new QueryEmbeddingCache(
                 null, new ObjectMapper(), properties, new SimpleMeterRegistry());
         AtomicInteger calls = new AtomicInteger();
+        CountDownLatch loaderStarted = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         var executor = Executors.newFixedThreadPool(8);
         try {
@@ -29,10 +30,12 @@ class QueryEmbeddingCacheTest {
                     .mapToObj(index -> executor.submit(() -> cache.getOrCompute(
                             "provider", "model", "同一个查询", () -> {
                                 calls.incrementAndGet();
+                                loaderStarted.countDown();
                                 await(release);
                                 return List.of(1.0f, 2.0f);
                             })))
                     .toList();
+            loaderStarted.await(2, TimeUnit.SECONDS);
             release.countDown();
             for (var future : futures) {
                 assertEquals(List.of(1.0f, 2.0f), future.get(2, TimeUnit.SECONDS));

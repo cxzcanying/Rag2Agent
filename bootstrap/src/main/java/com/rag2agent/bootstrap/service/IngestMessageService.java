@@ -2,6 +2,7 @@ package com.rag2agent.bootstrap.service;
 
 import com.rag2agent.bootstrap.mq.RocketMqProducerConfig;
 import com.rag2agent.bootstrap.mq.IngestTaskMessage;
+import com.rag2agent.bootstrap.config.IngestProperties;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rag2agent.framework.common.ErrorCode;
@@ -12,12 +13,17 @@ import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
 import com.rag2agent.bootstrap.observability.MqTracePropagation;
+import com.rag2agent.bootstrap.tenancy.TenantContext;
 import org.apache.rocketmq.client.producer.DefaultMQProducer;
 import org.apache.rocketmq.common.message.Message;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 /**
  * 状态机消息服务
@@ -33,28 +39,49 @@ public class IngestMessageService {
     private final Tracer tracer;
     private final ObjectMapper objectMapper;
     private final IngestPipelineService pipelineService;
+    private final ThreadPoolTaskExecutor ingestTaskExecutor;
+    private final IngestProperties ingestProperties;
+    private final boolean production;
 
     public IngestMessageService(
             ObjectProvider<DefaultMQProducer> producer,
             ObservationRegistry observationRegistry,
             Tracer tracer,
             ObjectMapper objectMapper,
-            IngestPipelineService pipelineService) {
+            IngestPipelineService pipelineService,
+            @Qualifier("ingestTaskExecutor") ThreadPoolTaskExecutor ingestTaskExecutor,
+            IngestProperties ingestProperties,
+            Environment environment) {
         this.producer = producer.getIfAvailable();
         this.observationRegistry = observationRegistry;
         this.tracer = tracer;
         this.objectMapper = objectMapper;
         this.pipelineService = pipelineService;
+        this.ingestTaskExecutor = ingestTaskExecutor;
+        this.ingestProperties = ingestProperties;
+        this.production = environment.acceptsProfiles(Profiles.of("prod", "production"));
     }
 
     public void sendIngestTask(Long documentId) {
-        sendIngestTask(documentId, null);
+        sendIngestTask(documentId, null, TenantContext.requireTenantId());
     }
 
     public void sendIngestTask(Long documentId, Long taskId) {
+        sendIngestTask(documentId, taskId, TenantContext.requireTenantId());
+    }
+
+    public void sendIngestTask(Long documentId, Long taskId, Long tenantId) {
         if (producer == null) {
-            // Demo 拓扑不启动 RocketMQ，沿用同一条 Pipeline 保证上传后仍能完成入库。
-            pipelineService.process(documentId, taskId);
+            if (production || !ingestProperties.isLocalFallbackEnabled()) {
+                throw new BusinessException(
+                        ErrorCode.UPSTREAM_UNAVAILABLE, "正式环境要求启用消息队列入库");
+            }
+            try {
+                ingestTaskExecutor.execute(() -> pipelineService.process(documentId, taskId));
+            } catch (RuntimeException exception) {
+                throw new BusinessException(
+                        ErrorCode.RATE_LIMITED, "入库任务队列已满，请稍后重试");
+            }
             return;
         }
         try {
@@ -65,7 +92,8 @@ public class IngestMessageService {
                     .observe(() -> {
                         Message message = new Message(
                                 RocketMqProducerConfig.INGEST_TOPIC, //使用TOPIC发布订阅模式
-                                messageBodyUnchecked(documentId, taskId).getBytes(StandardCharsets.UTF_8));
+                                messageBodyUnchecked(documentId, taskId, tenantId)
+                                        .getBytes(StandardCharsets.UTF_8));
                         if (!traceId.isBlank()) {
                             message.putUserProperty("traceId", traceId);
                         }
@@ -83,13 +111,15 @@ public class IngestMessageService {
         }
     }
 
-    private String messageBody(Long documentId, Long taskId) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(new IngestTaskMessage(documentId, taskId));
+    private String messageBody(Long documentId, Long taskId, Long tenantId)
+            throws JsonProcessingException {
+        return objectMapper.writeValueAsString(
+                new IngestTaskMessage(documentId, taskId, tenantId));
     }
 
-    private String messageBodyUnchecked(Long documentId, Long taskId) {
+    private String messageBodyUnchecked(Long documentId, Long taskId, Long tenantId) {
         try {
-            return messageBody(documentId, taskId);
+            return messageBody(documentId, taskId, tenantId);
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("入库消息序列化失败", e);
         }
